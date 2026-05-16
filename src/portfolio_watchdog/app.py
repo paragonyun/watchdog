@@ -7,11 +7,13 @@ from typing import Dict, List
 from .config import AppConfig, AssetConfig
 from .history import HistoryRepository
 from .message_format import split_message
+from .news_digest import write_hourly_codex_source
 from .notifiers.base import Notifier
 from .notifiers.console import ConsoleNotifier
 from .notifiers.telegram import TelegramNotifier
 from .notifiers.windows import WindowsNotifier
 from .news_llm import LlmNewsProvider, OpenAiNewsAnalyzer
+from .pdf_report import render_weekly_report_pdf
 from .portfolio.calculator import evaluate_portfolio
 from .providers.config_portfolio_provider import ConfigPortfolioProvider
 from .providers.kis import KisDomesticStockClient, KisPortfolioProvider, KisTokenClient
@@ -23,6 +25,8 @@ from .providers.rss_news_provider import RssNewsProvider
 from .providers.simple_http_price_provider import SimpleHttpPriceProvider
 from .providers.upbit import UpbitAccountClient, UpbitPortfolioProvider, UpbitPriceProvider
 from .providers.news_provider import NewsProvider
+from .report_data import build_portfolio_report_source, build_report_caption, build_report_payload, build_weekly_report_source_from_payload, load_report_payload_for_path, write_report_artifact
+from .report_validation import require_valid_report_payload
 from .reports import build_asset_status_report, build_news_report, build_portfolio_report
 from .repositories.file_snapshot_repository import FileSnapshotRepository
 from .rules.engine import RuleEngine
@@ -32,9 +36,10 @@ logger = logging.getLogger(__name__)
 
 
 class PortfolioWatchdogApp:
-    def __init__(self, config: AppConfig, env: Dict[str, str]) -> None:
+    def __init__(self, config: AppConfig, env: Dict[str, str], use_llm_news: bool = True) -> None:
         self.config = config
         self.env = env
+        self.use_llm_news = use_llm_news
         self.repository = FileSnapshotRepository(self.config.snapshot.path)
         self.history_repository = HistoryRepository(self.config.snapshot.history_path)
         self.portfolio_provider = self._build_portfolio_provider()
@@ -83,7 +88,7 @@ class PortfolioWatchdogApp:
         if self.config.news.provider_type == "noop":
             return NoopNewsProvider()
         provider: NewsProvider = RssNewsProvider(self.config.assets, self.config.news.queries, self.config.news.lookback_hours, self.config.news.max_items, self.config.news.max_items_per_query)
-        if not self.config.news.llm_enabled:
+        if not self.use_llm_news or not self.config.news.llm_enabled:
             return provider
         api_key = self.env.get("OPENAI_API_KEY")
         if not api_key:
@@ -117,19 +122,88 @@ class PortfolioWatchdogApp:
             return
         self.history_repository.append_news(news_items)
         self._notify_safe(build_news_report(news_items))
+        source_path = write_hourly_codex_source(news_items)
+        if source_path:
+            logger.info("Hourly Codex news source created: %s", source_path)
         logger.info("News report sent: %d items", len(news_items))
 
     def run_weekly_report(self) -> None:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        path, portfolio, state = self._create_weekly_report_source()
+        self._notify_file_safe(path, build_weekly_report_telegram_summary(portfolio, state, path))
+        logger.info("Weekly report source sent: %s", path)
+
+    def create_weekly_report_source(self) -> Path:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        path, _, _ = self._create_weekly_report_source()
+        logger.info("Weekly report source created: %s", path)
+        return path
+
+    def create_portfolio_report_source(self) -> Path:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         _, portfolio = self._evaluate_current_portfolio()
         news_items = self.news_provider.get_market_summary()
         self.history_repository.append_portfolio(portfolio)
         self.history_repository.append_news(news_items)
+        payload = build_report_payload(
+            "portfolio",
+            portfolio,
+            self.history_repository.load(),
+            news_items,
+            provider_status=self._provider_status(),
+        )
+        require_valid_report_payload(payload)
+        artifact = write_report_artifact(build_portfolio_report_source(payload), payload, "portfolio_report_source")
+        logger.info("Portfolio report source created: %s", artifact.text_path)
+        return artifact.text_path
+
+    def _create_weekly_report_source(self):
+        _, portfolio = self._evaluate_current_portfolio()
+        news_items = self.news_provider.get_market_summary()
+        self.history_repository.append_portfolio(portfolio)
+        self.history_repository.append_news(news_items)
         state = self.history_repository.load()
-        report = build_weekly_report_source(portfolio, state)
-        path = write_weekly_report_source(report)
-        self._notify_file_safe(path, build_weekly_report_telegram_summary(portfolio, state, path))
-        logger.info("Weekly report source created: %s", path)
+        payload = build_report_payload(
+            "weekly",
+            portfolio,
+            state,
+            news_items,
+            period_days=7,
+            provider_status=self._provider_status(),
+        )
+        require_valid_report_payload(payload)
+        artifact = write_report_artifact(build_weekly_report_source_from_payload(payload), payload, "weekly_report_source")
+        return artifact.text_path, portfolio, state
+
+    def send_report_document(self, path: Path) -> None:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        report_path = Path(path)
+        if not report_path.exists():
+            raise FileNotFoundError(f"리포트 파일을 찾을 수 없습니다: {report_path}")
+        if not report_path.is_file():
+            raise ValueError(f"리포트 경로가 파일이 아닙니다: {report_path}")
+        payload = load_report_payload_for_path(report_path)
+        if payload is not None:
+            require_valid_report_payload(payload)
+        caption = build_report_caption(report_path, payload)
+        self._notify_file_safe(report_path, caption)
+        logger.info("Weekly report document sent: %s", report_path)
+
+    def send_message_file(self, path: Path) -> None:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        message_path = Path(path)
+        if not message_path.exists():
+            raise FileNotFoundError(f"메시지 파일을 찾을 수 없습니다: {message_path}")
+        if not message_path.is_file():
+            raise ValueError(f"메시지 경로가 파일이 아닙니다: {message_path}")
+        self._notify_safe(message_path.read_text(encoding="utf-8"))
+        logger.info("Message file sent: %s", message_path)
+
+    def render_report_pdf(self, path: Path, output_path: Path | None = None) -> Path:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        pdf_path = render_weekly_report_pdf(Path(path), self.history_repository.load(), output_path)
+        logger.info("Weekly report PDF created: %s", pdf_path)
+        return pdf_path
 
     def send_sample_reports(self) -> None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -160,15 +234,15 @@ class PortfolioWatchdogApp:
         for chunk in split_message(message):
             try:
                 self.notifier.notify(chunk)
-            except Exception:
-                logger.exception("Primary notification failed, using fallback notifier.")
+            except Exception as exc:
+                logger.warning("Primary notification failed, using fallback notifier: %s", self._safe_error(exc))
                 if self.notifier is self.fallback_notifier:
                     ConsoleNotifier().notify(chunk)
                     continue
                 try:
                     self.fallback_notifier.notify(chunk)
-                except Exception:
-                    logger.exception("Fallback notification failed, using console notifier.")
+                except Exception as fallback_exc:
+                    logger.warning("Fallback notification failed, using console notifier: %s", self._safe_error(fallback_exc))
                     ConsoleNotifier().notify(chunk)
 
     def _notify_file_safe(self, path: Path, caption: str) -> None:
@@ -178,9 +252,25 @@ class PortfolioWatchdogApp:
             return
         try:
             notify_document(path, caption)
-        except Exception:
-            logger.exception("Document notification failed, using text fallback.")
+        except Exception as exc:
+            logger.warning("Document notification failed, using text fallback: %s", self._safe_error(exc))
             self._notify_safe(f"{caption}\n\n파일 경로: <code>{path}</code>")
+
+    def _safe_error(self, exc: Exception) -> str:
+        message = str(exc)
+        token = self.env.get("TELEGRAM_BOT_TOKEN")
+        return message.replace(token, "<redacted>") if token else message
+
+    def _provider_status(self) -> List[Dict[str, object]]:
+        result: List[Dict[str, object]] = []
+        provider = self.portfolio_provider
+        while provider is not None:
+            if isinstance(provider, UpbitPortfolioProvider):
+                result.append({"provider": "upbit", "used_fallback": provider.used_fallback, "error": provider.last_error})
+            if isinstance(provider, KisPortfolioProvider):
+                result.append({"provider": "kis", "used_fallback": provider.used_fallback, "error": provider.last_error})
+            provider = getattr(provider, "base_provider", None)
+        return result
 
     def check_config(self) -> None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

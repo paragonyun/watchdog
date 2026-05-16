@@ -13,9 +13,11 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Portfolio Watchdog")
-    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "send-sample-reports", "install-schedule", "check-config", "send-test-alert"])
+    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "send-sample-reports", "install-schedule", "check-config", "send-test-alert"])
     parser.add_argument("--config", default=None, help="설정 파일 경로")
     parser.add_argument("--env", default=None, help="환경 변수 파일 경로")
+    parser.add_argument("--path", default=None, help="render-report-pdf/send-report-document/send-message-file에서 사용할 파일 경로")
+    parser.add_argument("--output", default=None, help="render-report-pdf에서 생성할 PDF 파일 경로")
     args = parser.parse_args()
 
     if args.command == "setup":
@@ -26,6 +28,8 @@ def main() -> None:
         install_windows_schedule()
         logger.info("Windows 작업 스케줄러 등록을 완료했습니다.")
         return
+    if args.command in {"render-report-pdf", "send-report-document", "send-message-file"} and not args.path:
+        parser.error(f"{args.command}에는 --path가 필요합니다.")
 
     runtime_paths = resolve_runtime_paths(args.config, args.env)
     try:
@@ -35,13 +39,35 @@ def main() -> None:
         logger.exception("설정 로드 실패")
         raise SystemExit(1) from exc
 
-    app = PortfolioWatchdogApp(config=config, env=env)
+    app = PortfolioWatchdogApp(config=config, env=env, use_llm_news=args.command in {"run", "check-news", "weekly-report", "send-sample-reports"})
     if args.command == "run":
         app.run()
     elif args.command == "check-news":
         app.run_news_check()
     elif args.command == "weekly-report":
         app.run_weekly_report()
+    elif args.command == "weekly-source":
+        app.create_weekly_report_source()
+    elif args.command == "portfolio-source":
+        app.create_portfolio_report_source()
+    elif args.command == "render-report-pdf":
+        try:
+            app.render_report_pdf(Path(args.path), Path(args.output) if args.output else None)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+    elif args.command == "send-report-document":
+        try:
+            app.send_report_document(Path(args.path))
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+    elif args.command == "send-message-file":
+        try:
+            app.send_message_file(Path(args.path))
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
     elif args.command == "send-sample-reports":
         app.send_sample_reports()
     elif args.command == "check-config":

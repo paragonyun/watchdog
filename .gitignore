@@ -13,6 +13,17 @@ dist/
 logs/
 snapshots/
 reports/weekly_report_source_*.txt
+reports/weekly_report_source_*.json
+reports/weekly_report_final_*.md
+reports/weekly_report_final_*.pdf
+reports/portfolio_report_source_*.txt
+reports/portfolio_report_source_*.json
+reports/portfolio_report_final_*.md
+reports/portfolio_report_final_*.pdf
+reports/hourly_news_source_*.txt
+reports/hourly_news_source_*.consumed.txt
+reports/hourly_news_codex_*.html
+reports/hourly_news_example_*.html
 
 .pytest_cache/
 .mypy_cache/

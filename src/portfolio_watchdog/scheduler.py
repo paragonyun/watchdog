@@ -16,11 +16,7 @@ def install_windows_schedule(runner: Runner | None = None) -> None:
     run = runner or _default_runner
     workdir = get_executable_root()
     tasks: List[TaskSpec] = [
-        ("PortfolioWatchdogReport0800", "run", "DAILY", "08:00", None),
-        ("PortfolioWatchdogReport1200", "run", "DAILY", "12:00", None),
-        ("PortfolioWatchdogReport1800", "run", "DAILY", "18:00", None),
         ("PortfolioWatchdogNewsHourly", "check-news", "HOURLY", "00:00", None),
-        ("PortfolioWatchdogWeeklyReport", "weekly-report", "WEEKLY", "20:00", "SUN"),
     ]
     for name, command, schedule, start_time, day in tasks:
         args: List[str] = [

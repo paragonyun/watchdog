@@ -84,12 +84,18 @@ class UpbitPortfolioProvider(PortfolioProvider):
         self.account_client = account_client
         self.fallback_to_config = fallback_to_config
         self.base_provider = base_provider
+        self.used_fallback = False
+        self.last_error: Optional[str] = None
 
     def get_assets(self) -> List[AssetConfig]:
         base_assets = self.base_provider.get_assets()
+        self.used_fallback = False
+        self.last_error = None
         try:
             accounts = self.account_client.get_accounts()
         except Exception as exc:
+            self.used_fallback = self.fallback_to_config
+            self.last_error = str(exc)
             logger.warning("Upbit account lookup failed: %s", exc)
             if self.fallback_to_config:
                 return base_assets

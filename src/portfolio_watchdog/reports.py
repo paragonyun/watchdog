@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from .message_format import html_escape
 from .models import Alert, AssetEvaluation, NewsItem, PortfolioEvaluation
+from .news_digest import NewsTopic, build_news_watch_points, cluster_news_items
 
 _DISPLAY_NAMES = {
     "BTC": "비트코인",
@@ -48,16 +49,20 @@ def build_portfolio_report(portfolio: PortfolioEvaluation, alerts: List[Alert], 
 
 
 def build_news_report(news_items: List[NewsItem]) -> str:
+    topics = cluster_news_items(news_items)
     lines = [
         "<b>Portfolio Watchdog 뉴스 체크</b>",
         f"<code>{datetime.now():%Y-%m-%d %H:%M} 기준</code>",
         _SEPARATOR,
-        "<b>요약</b>",
+        "<b>영향 분포</b>",
         _impact_summary(news_items),
+        f"관련 자산: {html_escape(_related_asset_summary(news_items))}",
         "",
-        "<b>중요 뉴스</b>",
+        "<b>핵심 이슈</b>",
     ]
-    lines.extend(_build_news_lines(news_items, limit=8))
+    lines.extend(_build_topic_lines(topics, limit=5))
+    lines.extend(["", "<b>확인 포인트</b>"])
+    lines.extend([f"- {html_escape(point)}" for point in build_news_watch_points(topics)])
     return "\n".join(lines)
 
 
@@ -136,6 +141,44 @@ def _build_news_lines(news_items: List[NewsItem], limit: int) -> List[str]:
     return lines
 
 
+def _build_topic_lines(topics: List[NewsTopic], limit: int) -> List[str]:
+    if not topics:
+        return ["새로 확인된 포트폴리오 관련 주요 뉴스가 없습니다."]
+    lines: List[str] = []
+    for index, topic in enumerate(topics[:limit], start=1):
+        if index > 1:
+            lines.append("")
+        related = ", ".join(_display_symbol(symbol) for symbol in topic.related_assets) or "시장 전반"
+        risk = f" / 고위험 키워드: {', '.join(topic.high_risk_keywords[:3])}" if topic.high_risk_keywords else ""
+        lines.extend(
+            [
+                f"<b>{index}. {html_escape(topic.title)}</b>",
+                f"영향: <b>{html_escape(topic.impact)}</b> / 기사 {len(topic.items)}건 / 관련 자산: {html_escape(related)}{html_escape(risk)}",
+                f"왜 중요한가: {html_escape(_topic_reason(topic))}",
+            ]
+        )
+        for item in topic.items[:2]:
+            if item.url:
+                lines.append(f"- 관련 기사: <a href=\"{html_escape(item.url, quote=True)}\">{html_escape(_short_title(item.title))}</a>")
+            else:
+                lines.append(f"- 관련 기사: {html_escape(_short_title(item.title))}")
+    return lines
+
+
+def _topic_reason(topic: NewsTopic) -> str:
+    related = ", ".join(_display_symbol(symbol) for symbol in topic.related_assets) or "시장 전반"
+    if topic.impact == "부정":
+        return f"{related}에 단기 변동성 또는 심리 부담을 줄 수 있습니다."
+    if topic.impact == "긍정":
+        return f"{related}에 우호적인 흐름이지만 실제 가격 반응 확인이 필요합니다."
+    return f"{related}과 연결된 이슈이므로 후속 기사와 가격 반응을 함께 봐야 합니다."
+
+
+def _short_title(title: str) -> str:
+    cleaned = title.strip()
+    return cleaned if len(cleaned) <= 68 else cleaned[:65] + "..."
+
+
 def _build_alert_lines(alerts: List[Alert]) -> List[str]:
     if not alerts:
         return ["현재 알림 조건에 해당하는 변경 사항이 없습니다."]
@@ -156,6 +199,15 @@ def _impact_counts(news_items: List[NewsItem]) -> Dict[str, int]:
     for item in news_items:
         counts[item.impact if item.impact in counts else "중립"] += 1
     return counts
+
+
+def _related_asset_summary(news_items: List[NewsItem]) -> str:
+    symbols: List[str] = []
+    for item in news_items:
+        for symbol in item.related_assets:
+            if symbol not in symbols:
+                symbols.append(symbol)
+    return ", ".join(_display_symbol(symbol) for symbol in symbols[:8]) or "시장 전반"
 
 
 def _sum_by_type(assets: List[AssetEvaluation], asset_type: str) -> float:
