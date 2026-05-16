@@ -1,0 +1,149 @@
+portfolio:
+  assets:
+    - symbol: BTC
+      name: Bitcoin
+      asset_type: coin
+      target_weight: 0.056022
+      current_quantity: 0.03298807
+      alert_threshold_percent: 5
+
+    - symbol: ETH
+      name: Ethereum
+      asset_type: coin
+      target_weight: 0.088559
+      current_quantity: 1.77303307
+      alert_threshold_percent: 5
+
+    - symbol: LINK
+      name: Chainlink
+      asset_type: coin
+      target_weight: 0.030645
+      current_quantity: 150.81405830
+      alert_threshold_percent: 7
+
+    - symbol: AAVE
+      name: Aave
+      asset_type: coin
+      target_weight: 0.014193
+      current_quantity: 7.25346922
+      alert_threshold_percent: 7
+
+    - symbol: ARB
+      name: Arbitrum
+      asset_type: coin
+      target_weight: 0.020452
+      current_quantity: 8097.44515631
+      alert_threshold_percent: 7
+
+    - symbol: RISE_NASDAQ100
+      name: RISE US Nasdaq 100
+      asset_type: equity
+      broker_symbol: "368590"
+      target_weight: 0.163891
+      manual_value_krw: 11996600
+      alert_threshold_percent: 3
+
+    - symbol: TIGER_SP500
+      name: TIGER US S&P 500
+      asset_type: equity
+      broker_symbol: "360750"
+      target_weight: 0.177534
+      manual_value_krw: 12739500
+      alert_threshold_percent: 3
+
+    - symbol: TIGER_GOLD_FUTURES_H
+      name: TIGER Gold Futures(H)
+      asset_type: equity
+      broker_symbol: "319640"
+      target_weight: 0.145233
+      manual_value_krw: 10533520
+      alert_threshold_percent: 3
+
+    - symbol: PLUS_HUMANOID_ROBOT
+      name: PLUS Global Humanoid Robot
+      asset_type: equity
+      broker_symbol: "0035T0"
+      target_weight: 0.005553
+      manual_value_krw: 429570
+      alert_threshold_percent: 3
+
+    - symbol: SOL_US_NUCLEAR_SMR
+      name: SOL US Nuclear SMR
+      asset_type: equity
+      broker_symbol: "0051G0"
+      target_weight: 0.041874
+      manual_value_krw: 3002370
+      alert_threshold_percent: 3
+
+    - symbol: KODEX_K_REIT_INFRA
+      name: KODEX Korea REIT Infra
+      asset_type: equity
+      broker_symbol: "476800"
+      target_weight: 0.060613
+      manual_value_krw: 4280535
+      alert_threshold_percent: 3
+
+    - symbol: ACE_US10Y_BOND_ACTIVE_H
+      name: ACE US 10Y Bond Active(H)
+      asset_type: equity
+      broker_symbol: "0085N0"
+      target_weight: 0.096104
+      manual_value_krw: 6776200
+      alert_threshold_percent: 3
+
+    - symbol: NONGHYUP
+      name: 현금성 자산
+      asset_type: cash
+      target_weight: 0.099327
+      manual_value_krw: 7000000
+      alert_threshold_percent: 1
+
+providers:
+  portfolio:
+    type: hybrid
+    coin_type: upbit
+    equity_type: kis
+    fallback_to_config: true
+  price:
+    type: upbit
+    coin_gecko_ids:
+      BTC: bitcoin
+      ETH: ethereum
+      LINK: chainlink
+      AAVE: aave
+      ARB: arbitrum
+    fallback_prices:
+      BTC: 119682994
+      ETH: 3520000
+      LINK: 14320
+      AAVE: 137900
+      ARB: 178
+  news:
+    type: rss
+    llm_enabled: true
+    lookback_hours: 24
+    max_items: 5
+    max_items_per_query: 5
+    snapshot_path: snapshots/news_state.json
+    queries:
+      - 비트코인 이더리움 가상자산
+      - 미국 증시 나스닥 S&P500 연준 금리
+      - 금 가격 달러 안전자산
+      - 원전 SMR 원자력
+      - 휴머노이드 로봇 AI
+      - 리츠 부동산 금리
+      - 미국 국채 10년물 채권
+      - 한국 부동산 아파트 전세
+
+alerts:
+  price_change_threshold_percent: 5
+  weight_deviation_threshold_pct: 5
+  total_coin_weight_limit: 0.60
+
+telegram:
+  enabled: true
+  chat_id: null
+
+snapshot:
+  path: snapshots/state.json
+  history_path: snapshots/history.json
