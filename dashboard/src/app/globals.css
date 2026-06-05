@@ -143,6 +143,13 @@ p {
   margin: 0;
 }
 
+.source-note {
+  color: var(--warning);
+  font-size: 13px;
+  font-weight: 700;
+  margin: 8px 0 0;
+}
+
 .metric-grid {
   display: grid;
   gap: 12px;
@@ -235,6 +242,20 @@ p {
 
 .panel-heading h2 {
   font-size: 18px;
+  margin: 0;
+}
+
+.empty-panel {
+  padding: 28px;
+}
+
+.empty-panel h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+
+.empty-panel p {
+  color: var(--muted);
   margin: 0;
 }
 

@@ -76,6 +76,8 @@ WATCHDOG_UPLOAD_TOKEN=Watchdog CLI와 같은 업로드 토큰
 BLOB_READ_WRITE_TOKEN=Vercel Blob 토큰
 ```
 
+Vercel에는 위 웹앱용 값만 입력합니다. `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY`, `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_NO`, `KIS_ACCOUNT_PRODUCT_CODE`는 로컬 Watchdog 실행 환경의 `.env`에만 둡니다. 대시보드는 계좌 API를 직접 조회하지 않고, Watchdog이 API로 만든 최신 요약 JSON을 Vercel Blob에서 읽습니다.
+
 Watchdog 쪽 `.env`에는 아래 값을 추가합니다.
 
 ```text
@@ -92,6 +94,7 @@ node -e "console.log(require('crypto').createHash('sha256').update('원하는비
 ## 리포트 정확성 원칙
 
 - 현재 자산 현황은 실행 시점 Upbit/KIS/가격 API 평가값을 기준으로 합니다.
+- 대시보드 수익률은 일간/주간/월간 수익률이 아니라 매입가 대비 누계 평가손익률입니다. KIS는 계좌 잔고 API의 평가손익률을 사용하고, 코인은 평균매수가와 현재가 기준으로 계산합니다.
 - 평가액 추세는 히스토리 스냅샷 기준이며, 입출금 보정은 적용하지 않습니다.
 - 알 수 없는 사실은 `확인 불가`로 표시합니다.
 - Codex의 해석이나 예상은 `Codex 해석` 또는 `Codex 추정`으로 명시합니다.

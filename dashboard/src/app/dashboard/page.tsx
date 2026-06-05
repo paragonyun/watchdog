@@ -1,7 +1,7 @@
 import { requireSession } from "@/lib/auth";
 import { buildAssetSections, type AssetSection } from "@/lib/asset-groups";
 import type { AssetSummary, DashboardPayload } from "@/lib/dashboard-payload";
-import { getLatestDashboardPayload } from "@/lib/storage";
+import { getLatestDashboardData } from "@/lib/storage";
 
 import { logoutAction } from "../login/actions";
 
@@ -9,7 +9,12 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   await requireSession();
-  const payload = await getLatestDashboardPayload();
+  const { payload, source } = await getLatestDashboardData();
+
+  if (!payload) {
+    return <EmptyDashboardPage />;
+  }
+
   const groups = payload.asset_groups;
   const total = payload.total_value_krw || 1;
   const assetSections = buildAssetSections(payload.assets, groups, total);
@@ -20,6 +25,7 @@ export default async function DashboardPage() {
         <div>
           <p className="eyebrow">Portfolio Watchdog</p>
           <h1>자산 현황</h1>
+          {source === "sample" ? <p className="source-note">로컬 샘플 데이터</p> : null}
         </div>
         <form action={logoutAction}>
           <button className="secondary-button" type="submit">
@@ -128,7 +134,7 @@ function AssetSectionPanel({ section }: { section: AssetSection }) {
               <span>자산</span>
               <span>평가액</span>
               <span>비중</span>
-              <span>수익률</span>
+              <span>누계 수익률</span>
               <span>출처</span>
             </div>
             {section.assets.map((asset) => (
@@ -140,6 +146,31 @@ function AssetSectionPanel({ section }: { section: AssetSection }) {
         )}
       </div>
     </details>
+  );
+}
+
+function EmptyDashboardPage() {
+  return (
+    <main className="dashboard-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Portfolio Watchdog</p>
+          <h1>자산 현황</h1>
+        </div>
+        <form action={logoutAction}>
+          <button className="secondary-button" type="submit">
+            Sign out
+          </button>
+        </form>
+      </header>
+
+      <section className="content-band">
+        <div className="panel empty-panel">
+          <h2>업로드된 API 스냅샷이 없습니다</h2>
+          <p>Watchdog에서 대시보드 동기화를 실행하면 최신 요약 데이터가 표시됩니다.</p>
+        </div>
+      </section>
+    </main>
   );
 }
 

@@ -4,20 +4,38 @@ import { validateDashboardPayload, type DashboardPayload } from "./dashboard-pay
 
 const BLOB_KEY = "dashboard/latest.json";
 
-export async function getLatestDashboardPayload(): Promise<DashboardPayload> {
+export type DashboardDataSource = "blob" | "sample" | "empty";
+
+export type DashboardDataResult = {
+  payload: DashboardPayload | null;
+  source: DashboardDataSource;
+};
+
+export function resolveDashboardPayload(value: unknown, options: { allowSample: boolean }): DashboardDataResult {
+  if (validateDashboardPayload(value)) {
+    return { payload: value, source: "blob" };
+  }
+  if (options.allowSample) {
+    return { payload: samplePayload as DashboardPayload, source: "sample" };
+  }
+  return { payload: null, source: "empty" };
+}
+
+export async function getLatestDashboardData(): Promise<DashboardDataResult> {
+  const allowSample = process.env.NODE_ENV !== "production";
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return samplePayload as DashboardPayload;
+    return resolveDashboardPayload(null, { allowSample });
   }
   try {
     const { get } = await import("@vercel/blob");
     const file = await get(BLOB_KEY, { access: "private", useCache: false });
     if (!file?.stream) {
-      return samplePayload as DashboardPayload;
+      return resolveDashboardPayload(null, { allowSample });
     }
     const payload = JSON.parse(await new Response(file.stream).text()) as unknown;
-    return validateDashboardPayload(payload) ? payload : (samplePayload as DashboardPayload);
+    return resolveDashboardPayload(payload, { allowSample });
   } catch {
-    return samplePayload as DashboardPayload;
+    return resolveDashboardPayload(null, { allowSample });
   }
 }
 
