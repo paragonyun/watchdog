@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from .config import AppConfig, AssetConfig
+from .dashboard_data import build_dashboard_payload, load_dashboard_source_payload, upload_dashboard_payload
 from .history import HistoryRepository
 from .message_format import split_message
 from .news_digest import write_hourly_codex_source
@@ -198,6 +199,28 @@ class PortfolioWatchdogApp:
             raise ValueError(f"메시지 경로가 파일이 아닙니다: {message_path}")
         self._notify_safe(message_path.read_text(encoding="utf-8"))
         logger.info("Message file sent: %s", message_path)
+
+    def complete_report(self, path: Path, output_path: Path | None = None, sync_dashboard: bool = False) -> Path:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        report_path = Path(path)
+        pdf_path = self.render_report_pdf(report_path, output_path)
+        self.send_report_document(pdf_path)
+        if sync_dashboard:
+            self.sync_dashboard(report_path)
+        logger.info("Complete report processed: %s", pdf_path)
+        return pdf_path
+
+    def sync_dashboard(self, path: Path) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        report_payload = load_dashboard_source_payload(Path(path))
+        dashboard_payload = build_dashboard_payload(report_payload)
+        result = upload_dashboard_payload(
+            dashboard_payload,
+            self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
+            self.env.get("WATCHDOG_UPLOAD_TOKEN"),
+        )
+        logger.info("Dashboard synced: %s", result)
+        return dashboard_payload
 
     def render_report_pdf(self, path: Path, output_path: Path | None = None) -> Path:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

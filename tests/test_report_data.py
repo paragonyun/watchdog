@@ -35,7 +35,10 @@ def test_report_payload_validates_current_api_values_and_trend() -> None:
     assert payload["current_portfolio"]["total_value_krw"] == 1000
     assert payload["trend"]["change_krw"] == 100
     assert payload["validation"]["valid"] is True
-    assert "포트폴리오 전문 PDF" in build_portfolio_report_source(payload)
+    source = build_portfolio_report_source(payload)
+    assert "포트폴리오 전문 PDF" in source
+    assert "Public Equity 관점" in source
+    assert "IB식 QC" in source
     assert "총자산 <b>1,000원</b>" in build_report_caption(tmp_path_like("portfolio_report_final_20260516_1805.pdf"), payload)
 
 

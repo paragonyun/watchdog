@@ -80,6 +80,8 @@ def build_portfolio_report_source(payload: Dict[str, Any]) -> str:
         "- 해석은 'Codex 해석', 추정은 'Codex 추정'으로 명확히 라벨링",
         "- 직접적인 매수/매도/비중 조정 지시 금지",
         "- 최종 PDF는 짧은 텔레그램 캡션과 숫자가 일치해야 함",
+        "- Public Equity 관점: 자산군 리스크, thesis 훼손 여부, catalyst/watch point를 분리",
+        "- IB식 QC: 총자산/자산군/종목 합계, 단위, 날짜, 출처, 사실/해석/추정 라벨을 점검",
         "",
         "[기준]",
         f"- 기준 시각: {payload['generated_at']}",
@@ -104,6 +106,20 @@ def build_portfolio_report_source(payload: Dict[str, Any]) -> str:
     lines.extend(_asset_lines(current["assets"]))
     lines.extend(["", "[주요 뉴스와 영향]"])
     lines.extend(_news_impact_lines(payload.get("news_impacts", [])))
+    lines.extend(
+        [
+            "",
+            "[Public Equity 관점 체크]",
+            "- 포트폴리오 thesis에 긍정/부정/중립 영향을 주는 뉴스만 구분",
+            "- 자산군별로 확인된 사실, Codex 해석, 확인 불가를 분리",
+            "- 다음 관찰 포인트는 가격 지시가 아니라 재검토 조건으로 작성",
+            "",
+            "[IB식 QC 체크]",
+            "- 모든 핵심 숫자는 위 구조화 JSON과 일치해야 함",
+            "- 원화/퍼센트/기간 단위를 섞어 쓰지 말 것",
+            "- 출처 없는 기관 전망이나 확정되지 않은 이벤트는 사실처럼 쓰지 말 것",
+        ]
+    )
     lines.extend(["", "[검증 결과]", *_validation_lines(payload)])
     return "\n".join(lines)
 
@@ -121,6 +137,8 @@ def build_weekly_report_source_from_payload(payload: Dict[str, Any]) -> str:
         "- 해석은 'Codex 해석', 추정은 'Codex 추정'으로 명확히 라벨링",
         "- 금융기관 전망은 공개 출처에서 확인한 경우에만 출처명/날짜와 함께 작성",
         "- 직접적인 매수/매도/비중 조정 지시 금지",
+        "- Public Equity 관점: thesis, risk, catalyst, watch point를 구분",
+        "- IB식 QC: 숫자 tie-out, 단위, 날짜, 출처, 사실/해석/추정 라벨을 확인",
         "",
         "[기준]",
         f"- 기준 시각: {payload['generated_at']}",
@@ -148,6 +166,16 @@ def build_weekly_report_source_from_payload(payload: Dict[str, Any]) -> str:
     lines.extend(_news_impact_lines(payload.get("news_impacts", [])))
     lines.extend(
         [
+            "",
+            "[Public Equity 관점 체크]",
+            "- 이번 주 thesis가 강화/유지/약화/확인 불가 중 어디에 가까운지 자산군별로 표시",
+            "- catalyst/watch point는 다음 주 확인할 이벤트와 데이터로만 작성",
+            "- 매수/매도 지시 대신 재검토 조건과 확인할 증거를 제시",
+            "",
+            "[IB식 QC 체크]",
+            "- 총자산, 자산군 합계, 종목 합계, 변화율이 JSON과 일치하는지 확인",
+            "- 같은 수치를 본문/표/캡션에서 다르게 쓰지 말 것",
+            "- 확인된 사실, Codex 해석, Codex 추정을 문장마다 구분",
             "",
             "[금융기관 전망 작성 지시]",
             "- 실행 시점에 공개 웹 출처를 확인해 기관 전망을 요약",

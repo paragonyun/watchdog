@@ -1,0 +1,71 @@
+{
+  "schema_version": "dashboard_payload_v1",
+  "generated_at": "2026-06-05T08:00:00",
+  "report_kind": "portfolio",
+  "total_value_krw": 72000000,
+  "asset_groups": {
+    "coin": 15100000,
+    "equity": 49900000,
+    "cash": 7000000
+  },
+  "assets": [
+    {
+      "symbol": "TIGER_SP500",
+      "name": "S&P500",
+      "asset_type": "equity",
+      "value_krw": 12739500,
+      "weight_percent": 17.69,
+      "profit_loss_rate_percent": 8.4,
+      "price_source": "kis"
+    },
+    {
+      "symbol": "BTC",
+      "name": "비트코인",
+      "asset_type": "coin",
+      "value_krw": 3949000,
+      "weight_percent": 5.49,
+      "profit_loss_rate_percent": 12.1,
+      "price_source": "upbit"
+    },
+    {
+      "symbol": "NONGHYUP",
+      "name": "현금성 자산",
+      "asset_type": "cash",
+      "value_krw": 7000000,
+      "weight_percent": 9.72,
+      "profit_loss_rate_percent": null,
+      "price_source": "manual"
+    }
+  ],
+  "trend": {
+    "start_at": "2026-06-04T18:00:00",
+    "latest_at": "2026-06-05T08:00:00",
+    "start_total_krw": 71500000,
+    "latest_total_krw": 72000000,
+    "change_krw": 500000,
+    "change_pct": 0.6993,
+    "snapshot_count": 3
+  },
+  "news_impacts": [
+    {
+      "title": "미국 증시 기술주 강세",
+      "impact": "긍정",
+      "impact_score": 2,
+      "score_label": "Codex 해석",
+      "related_assets": ["TIGER_SP500"],
+      "reason": "미국 주식 ETF 비중과 연결된 우호적 흐름입니다.",
+      "why_it_matters": "현재 포트폴리오의 핵심 축인 ISA 평가액에 영향을 줄 수 있습니다.",
+      "url": "https://example.com"
+    }
+  ],
+  "provider_status": [
+    {
+      "provider": "upbit",
+      "used_fallback": false
+    },
+    {
+      "provider": "kis",
+      "used_fallback": false
+    }
+  ]
+}

@@ -14,6 +14,8 @@ python -m portfolio_watchdog weekly-source
 python -m portfolio_watchdog portfolio-source
 python -m portfolio_watchdog render-report-pdf --path reports\weekly_report_final_YYYYMMDD_HHMM.md
 python -m portfolio_watchdog send-report-document --path reports\weekly_report_final_YYYYMMDD_HHMM.pdf
+python -m portfolio_watchdog complete-report --path reports\portfolio_report_final_YYYYMMDD_HHMM.md --sync-dashboard
+python -m portfolio_watchdog sync-dashboard --path reports\portfolio_report_source_YYYYMMDD_HHMM.json
 python -m portfolio_watchdog send-message-file --path reports\hourly_news_codex_YYYYMMDD_HHMM.html
 python -m portfolio_watchdog send-sample-reports
 python -m portfolio_watchdog install-schedule
@@ -57,7 +59,35 @@ python -m portfolio_watchdog send-test-alert
 - Codex Automations에서 `Complete Watchdog weekly report`, `Complete Watchdog portfolio reports`, hourly news 자동화가 `ACTIVE`인지 확인
 - Windows 작업 스케줄러가 필요하면 `python -m portfolio_watchdog install-schedule` 재실행
 
-위클리 완성 리포트와 08/12/18 포트폴리오 리포트는 Codex 자동화가 PDF로 생성해 텔레그램으로 보냅니다. Windows 작업 스케줄러는 매시간 뉴스 체크만 담당합니다.
+위클리 완성 리포트와 08/12/18 포트폴리오 리포트의 최종 Markdown 문안은 Codex 자동화가 작성합니다. 작성된 Markdown은 `complete-report` 명령으로 PDF 렌더링, 텔레그램 전송, 선택적 대시보드 동기화까지 한 번에 처리합니다. Windows 작업 스케줄러는 매시간 뉴스 체크만 담당합니다.
+
+## 호스팅 대시보드
+
+`dashboard/` 폴더에는 Vercel 배포용 Next.js 대시보드가 있습니다. 로그인은 단일 비밀번호와 보안 쿠키를 사용하고, Watchdog CLI는 요약 payload만 `/api/upload`로 업로드합니다. 클라우드에는 수량, 평단, 계좌 식별자, API 키를 올리지 않습니다.
+
+대시보드는 Next.js 16 기준이라 로컬 빌드에는 Node.js 20.9 이상이 필요합니다.
+
+대시보드 환경 변수:
+
+```text
+DASHBOARD_PASSWORD_HASH=sha256 비밀번호 해시
+DASHBOARD_SESSION_SECRET=긴 랜덤 문자열
+WATCHDOG_UPLOAD_TOKEN=Watchdog CLI와 같은 업로드 토큰
+BLOB_READ_WRITE_TOKEN=Vercel Blob 토큰
+```
+
+Watchdog 쪽 `.env`에는 아래 값을 추가합니다.
+
+```text
+WATCHDOG_DASHBOARD_UPLOAD_URL=https://<your-dashboard-domain>/api/upload
+WATCHDOG_UPLOAD_TOKEN=위와 같은 업로드 토큰
+```
+
+비밀번호 해시는 대시보드 폴더에서 아래처럼 만들 수 있습니다.
+
+```powershell
+node -e "console.log(require('crypto').createHash('sha256').update('원하는비밀번호').digest('hex'))"
+```
 
 ## 리포트 정확성 원칙
 
