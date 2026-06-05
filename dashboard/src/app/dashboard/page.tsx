@@ -1,4 +1,5 @@
 import { requireSession } from "@/lib/auth";
+import { buildAssetSections, type AssetSection } from "@/lib/asset-groups";
 import type { AssetSummary, DashboardPayload } from "@/lib/dashboard-payload";
 import { getLatestDashboardPayload } from "@/lib/storage";
 
@@ -11,7 +12,7 @@ export default async function DashboardPage() {
   const payload = await getLatestDashboardPayload();
   const groups = payload.asset_groups;
   const total = payload.total_value_krw || 1;
-  const sortedAssets = [...payload.assets].sort((a, b) => b.value_krw - a.value_krw);
+  const assetSections = buildAssetSections(payload.assets, groups, total);
 
   return (
     <main className="dashboard-shell">
@@ -75,19 +76,12 @@ export default async function DashboardPage() {
       <section className="content-band">
         <div className="panel">
           <div className="panel-heading">
-            <h2>종목별 현황</h2>
-            <span>{sortedAssets.length}개</span>
+            <h2>자산별 현황</h2>
+            <span>{payload.assets.length}개 종목</span>
           </div>
-          <div className="asset-table" role="table" aria-label="종목별 현황">
-            <div className="asset-row asset-head" role="row">
-              <span>자산</span>
-              <span>평가액</span>
-              <span>비중</span>
-              <span>수익률</span>
-              <span>출처</span>
-            </div>
-            {sortedAssets.map((asset) => (
-              <AssetRow asset={asset} key={asset.symbol} />
+          <div className="asset-section-list">
+            {assetSections.map((section) => (
+              <AssetSectionPanel section={section} key={section.key} />
             ))}
           </div>
         </div>
@@ -114,6 +108,38 @@ function GroupRow({ label, value, total, tone }: { label: string; value: number;
       <span>{formatKrw(value)}</span>
       <em>{formatPercent(percentage(value, total))}</em>
     </div>
+  );
+}
+
+function AssetSectionPanel({ section }: { section: AssetSection }) {
+  return (
+    <details className="asset-section">
+      <summary>
+        <span className={`dot ${section.key}`} />
+        <strong>{section.label}</strong>
+        <span>{formatKrw(section.value_krw)}</span>
+        <em>{formatPercent(section.weight_percent)}</em>
+        <small>{section.assets.length}개 종목</small>
+      </summary>
+      <div className="asset-section-body">
+        {section.assets.length > 0 ? (
+          <div className="asset-table" role="table" aria-label={`${section.label} 세부 종목`}>
+            <div className="asset-row asset-head" role="row">
+              <span>자산</span>
+              <span>평가액</span>
+              <span>비중</span>
+              <span>수익률</span>
+              <span>출처</span>
+            </div>
+            {section.assets.map((asset) => (
+              <AssetRow asset={asset} key={`${section.key}-${asset.symbol}`} />
+            ))}
+          </div>
+        ) : (
+          <p className="empty">등록된 세부 종목이 없습니다.</p>
+        )}
+      </div>
+    </details>
   );
 }
 

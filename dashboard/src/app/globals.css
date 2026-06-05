@@ -17,6 +17,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  max-width: 100%;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -116,6 +121,7 @@ p {
 }
 
 .dashboard-shell {
+  box-sizing: border-box;
   margin: 0 auto;
   max-width: 1180px;
   min-width: 0;
@@ -197,6 +203,7 @@ p {
 }
 
 .content-band {
+  min-width: 0;
   margin-bottom: 16px;
 }
 
@@ -204,6 +211,7 @@ p {
   display: grid;
   gap: 16px;
   grid-template-columns: 1fr 1fr;
+  min-width: 0;
 }
 
 .panel {
@@ -239,10 +247,14 @@ p {
   border-radius: 8px;
   display: flex;
   height: 18px;
+  max-width: 100%;
   overflow: hidden;
+  width: 100%;
 }
 
 .allocation-bar span {
+  flex: 0 0 auto;
+  height: 100%;
   min-width: 2px;
 }
 
@@ -335,6 +347,58 @@ p {
   display: grid;
 }
 
+.asset-section-list {
+  display: grid;
+  gap: 12px;
+}
+
+.asset-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.asset-section summary {
+  align-items: center;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 14px minmax(120px, 1fr) auto auto auto auto;
+  list-style: none;
+  min-height: 58px;
+  padding: 12px 14px;
+}
+
+.asset-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.asset-section summary::after {
+  color: var(--muted);
+  content: "상세보기";
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.asset-section[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.asset-section[open] summary::after {
+  content: "접기";
+}
+
+.asset-section summary em,
+.asset-section summary small {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.asset-section-body {
+  background: #fbfcfd;
+  padding: 0 14px 10px;
+}
+
 .asset-row {
   grid-template-columns: minmax(160px, 1.5fr) repeat(4, minmax(96px, 1fr));
   min-height: 54px;
@@ -388,6 +452,10 @@ p {
     grid-template-columns: 1fr 1fr;
     padding: 12px;
   }
+
+  .asset-section-body .asset-row {
+    background: var(--panel);
+  }
 }
 
 @media (max-width: 520px) {
@@ -401,6 +469,22 @@ p {
 
   .group-row {
     grid-template-columns: 14px 1fr;
+  }
+
+  .asset-section summary {
+    align-items: start;
+    grid-template-columns: 14px 1fr;
+  }
+
+  .allocation-bar {
+    display: none;
+  }
+
+  .asset-section summary span:not(.dot),
+  .asset-section summary em,
+  .asset-section summary small,
+  .asset-section summary::after {
+    grid-column: 2;
   }
 
   .panel-heading {
