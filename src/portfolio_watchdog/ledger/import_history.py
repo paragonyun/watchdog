@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+import math
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from portfolio_watchdog.ledger.repository import LedgerRepository
 
 PROVIDER = "legacy_history"
 DATA_STATUS = "actual"
+SEOUL_TIMEZONE = timezone(timedelta(hours=9), "Asia/Seoul")
 
 
 def import_history_json(history_path: Path, repository: LedgerRepository) -> int:
@@ -91,18 +93,25 @@ def _datetime(value: Any, field: str) -> datetime:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be an ISO datetime string")
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise ValueError(f"{field} must be an ISO datetime string") from error
+    # history.py writes datetime.now().isoformat(), so legacy naive values are Seoul local time.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SEOUL_TIMEZONE)
+    return parsed.astimezone(timezone.utc)
 
 
 def _number(value: Any, field: str) -> float:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be a number")
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{field} must be a number") from error
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be a finite number")
+    return number
 
 
 def _optional_number(value: Any, field: str) -> float | None:
