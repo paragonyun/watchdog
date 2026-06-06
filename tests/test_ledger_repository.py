@@ -80,6 +80,50 @@ def test_ledger_repository_initializes_schema_and_connection_settings(tmp_path) 
             )
 
 
+def test_connection_sets_busy_timeout_before_journal_mode(tmp_path, monkeypatch) -> None:
+    statements = []
+    real_connect = sqlite3.connect
+
+    def tracking_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr("portfolio_watchdog.ledger.repository.sqlite3.connect", tracking_connect)
+
+    LedgerRepository(tmp_path / "watchdog.db")
+
+    busy_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.upper().startswith("PRAGMA BUSY_TIMEOUT")
+    )
+    journal_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.upper().startswith("PRAGMA JOURNAL_MODE")
+    )
+    assert busy_index < journal_index
+
+
+def test_concurrent_first_initialization_does_not_lock_database(tmp_path) -> None:
+    path = tmp_path / "watchdog.db"
+    barrier = Barrier(8)
+
+    def initialize(_):
+        barrier.wait()
+        return LedgerRepository(path)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        repositories = list(executor.map(initialize, range(8)))
+
+    assert len(repositories) == 8
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT version FROM schema_version").fetchall() == [
+            (SCHEMA_VERSION,)
+        ]
+
+
 def test_schema_initialization_rolls_back_on_failure(tmp_path, monkeypatch) -> None:
     path = tmp_path / "watchdog.db"
     monkeypatch.setattr(
@@ -148,6 +192,48 @@ def test_upsert_event_is_idempotent_and_updates_mutable_detail(tmp_path) -> None
     assert repository.upsert_event(revised) is False
     assert repository.list_events() == [
         LedgerEvent(**{**revised.__dict__, "occurred_at": _utc(revised.occurred_at)})
+    ]
+
+
+@pytest.mark.parametrize(
+    "stale",
+    [
+        _event(quantity=0.0009, cash_flow_krw=-110_000, fee_krw=600),
+        _event(quantity=0.002, cash_flow_krw=-90_000, fee_krw=600),
+        _event(quantity=0.002, cash_flow_krw=-110_000, fee_krw=400),
+        _event(quantity=None, cash_flow_krw=-110_000, fee_krw=600),
+    ],
+)
+def test_upsert_event_does_not_replace_cumulative_values_with_stale_data(
+    tmp_path, stale
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    current = _event(quantity=0.001, cash_flow_krw=-100_000, fee_krw=500)
+
+    repository.upsert_event(current)
+    assert repository.upsert_event(stale) is False
+
+    assert repository.list_events() == [
+        LedgerEvent(**{**current.__dict__, "occurred_at": _utc(current.occurred_at)})
+    ]
+
+
+def test_upsert_event_accepts_equal_or_increased_cumulative_values(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    current = _event(quantity=0.001, cash_flow_krw=-100_000, fee_krw=500)
+    increased = _event(
+        occurred_at=datetime(2026, 6, 6, 8, 1),
+        quantity=0.002,
+        cash_flow_krw=-110_000,
+        fee_krw=600,
+        memo="latest cumulative detail",
+    )
+
+    repository.upsert_event(current)
+    assert repository.upsert_event(increased) is False
+
+    assert repository.list_events() == [
+        LedgerEvent(**{**increased.__dict__, "occurred_at": _utc(increased.occurred_at)})
     ]
 
 
@@ -370,6 +456,36 @@ def test_cursor_round_trip_and_update(tmp_path) -> None:
         assert connection.execute(
             "SELECT updated_at FROM collection_cursors WHERE provider = 'upbit' AND stream = 'orders'"
         ).fetchone() == ("2026-06-06T09:00:00+00:00",)
+
+
+def test_cursor_does_not_move_backward_for_iso_datetime(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    repository.set_cursor(
+        "upbit", "trades", "2026-06-06T09:00:00+09:00", datetime(2026, 6, 6, 1, 0)
+    )
+    repository.set_cursor(
+        "upbit", "trades", "2026-06-05T23:00:00+00:00", datetime(2026, 6, 6, 2, 0)
+    )
+
+    assert repository.get_cursor("upbit", "trades") == "2026-06-06T09:00:00+09:00"
+
+
+def test_cursor_does_not_move_backward_for_numeric_pagination_cursor(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    repository.set_cursor("kis", "orders", "10", datetime(2026, 6, 6, 1, 0))
+    repository.set_cursor("kis", "orders", "9", datetime(2026, 6, 6, 2, 0))
+    assert repository.get_cursor("kis", "orders") == "10"
+
+    repository.set_cursor("kis", "orders", "11", datetime(2026, 6, 6, 3, 0))
+    assert repository.get_cursor("kis", "orders") == "11"
+
+
+def test_opaque_cursor_order_is_owned_by_caller(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    repository.set_cursor("provider", "opaque", "cursor-z", datetime(2026, 6, 6, 1, 0))
+    repository.set_cursor("provider", "opaque", "cursor-a", datetime(2026, 6, 6, 2, 0))
+
+    assert repository.get_cursor("provider", "opaque") == "cursor-a"
 
 
 def test_ledger_config_defaults_and_top_level_parsing(tmp_path) -> None:
