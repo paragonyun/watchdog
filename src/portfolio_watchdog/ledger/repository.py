@@ -51,6 +51,7 @@ class LedgerRepository:
                 values,
             ).fetchone()
             if inserted is None:
+                # Without a provider revision, the last upsert call is the correction source.
                 connection.execute(
                     """
                     UPDATE ledger_events SET
@@ -58,22 +59,8 @@ class LedgerRepository:
                         cash_flow_krw = ?, quantity = ?, unit_price_krw = ?,
                         fee_krw = ?, external_cash_flow = ?, memo = ?
                     WHERE provider = ? AND provider_event_id = ?
-                        AND (
-                            quantity IS NULL
-                            OR (? IS NOT NULL AND ? >= quantity)
-                        )
-                        AND ABS(?) >= ABS(cash_flow_krw)
-                        AND ? >= fee_krw
                     """,
-                    (
-                        *values[2:],
-                        values[0],
-                        values[1],
-                        event.quantity,
-                        event.quantity,
-                        event.cash_flow_krw,
-                        event.fee_krw,
-                    ),
+                    (*values[2:], values[0], values[1]),
                 )
         return inserted is not None
 
@@ -238,13 +225,20 @@ class LedgerRepository:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT cursor_value FROM collection_cursors WHERE provider = ? AND stream = ?",
+                "SELECT cursor_value, updated_at FROM collection_cursors "
+                "WHERE provider = ? AND stream = ?",
                 (provider, stream),
             ).fetchone()
-            if existing is not None and _cursor_moves_backward(
-                existing["cursor_value"], cursor_value
-            ):
-                return
+            normalized_updated_at = _utc_iso(updated_at)
+            if existing is not None:
+                existing_updated_at = _from_utc_iso(existing["updated_at"])
+                new_updated_at = _from_utc_iso(normalized_updated_at)
+                if new_updated_at < existing_updated_at:
+                    return
+                if new_updated_at == existing_updated_at and _cursor_moves_backward(
+                    existing["cursor_value"], cursor_value
+                ):
+                    return
             connection.execute(
                 """
                 INSERT INTO collection_cursors(provider, stream, cursor_value, updated_at)
@@ -253,7 +247,7 @@ class LedgerRepository:
                     cursor_value = excluded.cursor_value,
                     updated_at = excluded.updated_at
                 """,
-                (provider, stream, cursor_value, _utc_iso(updated_at)),
+                (provider, stream, cursor_value, normalized_updated_at),
             )
 
     def _initialize_schema(self) -> None:

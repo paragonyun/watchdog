@@ -195,45 +195,28 @@ def test_upsert_event_is_idempotent_and_updates_mutable_detail(tmp_path) -> None
     ]
 
 
-@pytest.mark.parametrize(
-    "stale",
-    [
-        _event(quantity=0.0009, cash_flow_krw=-110_000, fee_krw=600),
-        _event(quantity=0.002, cash_flow_krw=-90_000, fee_krw=600),
-        _event(quantity=0.002, cash_flow_krw=-110_000, fee_krw=400),
-        _event(quantity=None, cash_flow_krw=-110_000, fee_krw=600),
-    ],
-)
-def test_upsert_event_does_not_replace_cumulative_values_with_stale_data(
-    tmp_path, stale
+def test_upsert_event_last_call_replaces_all_fields_including_decreased_correction(
+    tmp_path,
 ) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
     current = _event(quantity=0.001, cash_flow_krw=-100_000, fee_krw=500)
-
-    repository.upsert_event(current)
-    assert repository.upsert_event(stale) is False
-
-    assert repository.list_events() == [
-        LedgerEvent(**{**current.__dict__, "occurred_at": _utc(current.occurred_at)})
-    ]
-
-
-def test_upsert_event_accepts_equal_or_increased_cumulative_values(tmp_path) -> None:
-    repository = LedgerRepository(tmp_path / "watchdog.db")
-    current = _event(quantity=0.001, cash_flow_krw=-100_000, fee_krw=500)
-    increased = _event(
-        occurred_at=datetime(2026, 6, 6, 8, 1),
-        quantity=0.002,
-        cash_flow_krw=-110_000,
-        fee_krw=600,
-        memo="latest cumulative detail",
+    correction = _event(
+        occurred_at=datetime(2026, 6, 6, 8, 2),
+        event_type="sell",
+        asset_symbol="ETH",
+        quantity=0.0009,
+        cash_flow_krw=-90_000,
+        unit_price_krw=99_000_000,
+        fee_krw=400,
+        external_cash_flow=True,
+        memo="provider correction",
     )
 
     repository.upsert_event(current)
-    assert repository.upsert_event(increased) is False
+    assert repository.upsert_event(correction) is False
 
     assert repository.list_events() == [
-        LedgerEvent(**{**increased.__dict__, "occurred_at": _utc(increased.occurred_at)})
+        LedgerEvent(**{**correction.__dict__, "occurred_at": _utc(correction.occurred_at)})
     ]
 
 
@@ -458,34 +441,70 @@ def test_cursor_round_trip_and_update(tmp_path) -> None:
         ).fetchone() == ("2026-06-06T09:00:00+00:00",)
 
 
-def test_cursor_does_not_move_backward_for_iso_datetime(tmp_path) -> None:
+def test_cursor_ignores_older_updated_at_for_iso_datetime(tmp_path) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
     repository.set_cursor(
-        "upbit", "trades", "2026-06-06T09:00:00+09:00", datetime(2026, 6, 6, 1, 0)
+        "upbit", "trades", "2026-06-06T09:00:00+09:00", datetime(2026, 6, 6, 2, 0)
     )
     repository.set_cursor(
-        "upbit", "trades", "2026-06-05T23:00:00+00:00", datetime(2026, 6, 6, 2, 0)
+        "upbit", "trades", "2026-06-06T01:00:00+00:00", datetime(2026, 6, 6, 1, 0)
     )
 
     assert repository.get_cursor("upbit", "trades") == "2026-06-06T09:00:00+09:00"
 
 
-def test_cursor_does_not_move_backward_for_numeric_pagination_cursor(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("first", "backward"),
+    [
+        ("2026-06-06T09:00:00+09:00", "2026-06-05T23:00:00+00:00"),
+        ("10", "9"),
+    ],
+)
+def test_cursor_same_updated_at_does_not_move_backward_for_ordered_cursor(
+    tmp_path, first, backward
+) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
-    repository.set_cursor("kis", "orders", "10", datetime(2026, 6, 6, 1, 0))
-    repository.set_cursor("kis", "orders", "9", datetime(2026, 6, 6, 2, 0))
-    assert repository.get_cursor("kis", "orders") == "10"
+    updated_at = datetime(2026, 6, 6, 1, 0)
 
-    repository.set_cursor("kis", "orders", "11", datetime(2026, 6, 6, 3, 0))
-    assert repository.get_cursor("kis", "orders") == "11"
+    repository.set_cursor("provider", "ordered", first, updated_at)
+    repository.set_cursor("provider", "ordered", backward, updated_at)
+
+    assert repository.get_cursor("provider", "ordered") == first
 
 
-def test_opaque_cursor_order_is_owned_by_caller(tmp_path) -> None:
+def test_cursor_compares_updated_at_after_utc_normalization(tmp_path) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
-    repository.set_cursor("provider", "opaque", "cursor-z", datetime(2026, 6, 6, 1, 0))
-    repository.set_cursor("provider", "opaque", "cursor-a", datetime(2026, 6, 6, 2, 0))
+    repository.set_cursor(
+        "provider",
+        "ordered",
+        "10",
+        datetime(2026, 6, 6, 9, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    repository.set_cursor(
+        "provider",
+        "ordered",
+        "9",
+        datetime(2026, 6, 6, 0, 0, tzinfo=UTC),
+    )
+
+    assert repository.get_cursor("provider", "ordered") == "10"
+
+
+def test_opaque_cursor_same_updated_at_uses_last_call_value(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    updated_at = datetime(2026, 6, 6, 1, 0)
+    repository.set_cursor("provider", "opaque", "cursor-z", updated_at)
+    repository.set_cursor("provider", "opaque", "cursor-a", updated_at)
 
     assert repository.get_cursor("provider", "opaque") == "cursor-a"
+
+
+def test_opaque_cursor_ignores_delayed_older_updated_at(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    repository.set_cursor("provider", "opaque", "cursor-latest", datetime(2026, 6, 6, 2, 0))
+    repository.set_cursor("provider", "opaque", "cursor-delayed", datetime(2026, 6, 6, 1, 0))
+
+    assert repository.get_cursor("provider", "opaque") == "cursor-latest"
 
 
 def test_ledger_config_defaults_and_top_level_parsing(tmp_path) -> None:
