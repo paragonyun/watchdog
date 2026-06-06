@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Iterator, Optional, Union
+from typing import Iterator, Optional, Sequence, Union
 
 from portfolio_watchdog.ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
 from portfolio_watchdog.ledger.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
@@ -181,6 +181,63 @@ class LedgerRepository:
                     WHERE provider = ? AND captured_at = ? AND asset_symbol = ?
                     """,
                     (*values[3:], *values[:3]),
+                )
+        return inserted is not None
+
+    def upsert_snapshot(
+        self, account: AccountSnapshot, assets: Sequence[AssetSnapshot]
+    ) -> bool:
+        account_values = (
+            account.provider,
+            _utc_iso(account.captured_at),
+            account.total_value_krw,
+            account.data_status,
+        )
+        with self._connect() as connection:
+            inserted = connection.execute(
+                """
+                INSERT INTO account_snapshots(provider, captured_at, total_value_krw, data_status)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(provider, captured_at) DO NOTHING
+                RETURNING 1
+                """,
+                account_values,
+            ).fetchone()
+            if inserted is None:
+                connection.execute(
+                    """
+                    UPDATE account_snapshots SET total_value_krw = ?, data_status = ?
+                    WHERE provider = ? AND captured_at = ?
+                    """,
+                    (*account_values[2:], *account_values[:2]),
+                )
+            for asset in assets:
+                asset_values = (
+                    asset.provider,
+                    _utc_iso(asset.captured_at),
+                    asset.asset_symbol,
+                    asset.asset_type,
+                    asset.value_krw,
+                    asset.quantity,
+                    asset.unit_price_krw,
+                    asset.average_buy_price_krw,
+                    asset.data_status,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO asset_snapshots(
+                        provider, captured_at, asset_symbol, asset_type, value_krw,
+                        quantity, unit_price_krw, average_buy_price_krw, data_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(provider, captured_at, asset_symbol) DO UPDATE SET
+                        asset_type = excluded.asset_type,
+                        value_krw = excluded.value_krw,
+                        quantity = excluded.quantity,
+                        unit_price_krw = excluded.unit_price_krw,
+                        average_buy_price_krw = excluded.average_buy_price_krw,
+                        data_status = excluded.data_status
+                    """,
+                    asset_values,
                 )
         return inserted is not None
 
