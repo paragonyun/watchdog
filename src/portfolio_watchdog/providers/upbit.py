@@ -2,23 +2,159 @@ import hashlib
 import logging
 import time
 import uuid
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 import requests
 
 from ..config import AppConfig, AssetConfig
+from ..ledger.models import LedgerEvent
 from ..models import PriceQuote
 from .portfolio_provider import PortfolioProvider
 from .price_provider import PriceProvider
 
 logger = logging.getLogger(__name__)
+MAX_PAGES_PER_REQUEST = 1000
 
 try:
     import jwt
 except Exception:
     jwt = None
+
+
+def _required_text(row: Dict, field: str) -> str:
+    value = row.get(field)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Upbit {field} is required")
+    return value
+
+
+def _number(row: Dict, field: str) -> Decimal:
+    try:
+        value = Decimal(str(row[field]))
+    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"Upbit {field} must be numeric") from exc
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"Upbit {field} must be a non-negative finite number")
+    return value
+
+
+def _occurred_at(row: Dict, field: str) -> datetime:
+    value = _required_text(row, field)
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Upbit {field} must be an ISO datetime") from exc
+    if result.tzinfo is None:
+        raise ValueError(f"Upbit {field} must include a timezone")
+    return result
+
+
+def parse_upbit_closed_orders(rows: list[dict]) -> list[LedgerEvent]:
+    events: list[LedgerEvent] = []
+    for order in rows:
+        order_id = _required_text(order, "uuid")
+        market = _required_text(order, "market")
+        if not market.startswith("KRW-") or len(market) == 4:
+            raise ValueError("Upbit market must be a KRW asset market")
+        asset_symbol = market.split("-", 1)[1]
+        side = _required_text(order, "side")
+        if side not in {"bid", "ask"}:
+            raise ValueError("Upbit side must be bid or ask")
+        paid_fee = _number(order, "paid_fee")
+        trades = order.get("trades")
+        if not isinstance(trades, list):
+            raise ValueError("Upbit trades must be a list")
+
+        parsed_trades = []
+        for trade in trades:
+            parsed_trades.append(
+                {
+                    "id": _required_text(trade, "uuid"),
+                    "price": _number(trade, "price"),
+                    "volume": _number(trade, "volume"),
+                    "funds": _number(trade, "funds"),
+                    "occurred_at": _occurred_at(trade, "created_at"),
+                    "fee": _number(trade, "fee") if "fee" in trade else None,
+                }
+            )
+
+        missing_fee = [trade for trade in parsed_trades if trade["fee"] is None]
+        explicit_fee = sum(
+            (trade["fee"] for trade in parsed_trades if trade["fee"] is not None),
+            Decimal("0"),
+        )
+        remaining_fee = paid_fee - explicit_fee
+        if remaining_fee < 0:
+            raise ValueError("Upbit trade fees exceed paid_fee")
+        missing_funds = sum((trade["funds"] for trade in missing_fee), Decimal("0"))
+        allocated = Decimal("0")
+        for index, trade in enumerate(missing_fee):
+            if index == len(missing_fee) - 1:
+                trade["fee"] = remaining_fee - allocated
+            else:
+                fee = remaining_fee * trade["funds"] / missing_funds if missing_funds else Decimal("0")
+                trade["fee"] = fee
+                allocated += fee
+
+        for trade in parsed_trades:
+            fee = trade["fee"] or Decimal("0")
+            is_buy = side == "bid"
+            events.append(
+                LedgerEvent(
+                    provider="upbit",
+                    provider_event_id=f"{order_id}:{trade['id']}",
+                    occurred_at=trade["occurred_at"],
+                    event_type="buy" if is_buy else "sell",
+                    asset_symbol=asset_symbol,
+                    cash_flow_krw=float(-(trade["funds"] + fee) if is_buy else trade["funds"] - fee),
+                    quantity=float(trade["volume"] if is_buy else -trade["volume"]),
+                    unit_price_krw=float(trade["price"]),
+                    fee_krw=float(fee),
+                )
+            )
+    return events
+
+
+def _parse_upbit_transfers(
+    rows: list[dict], completed_state: str, event_type: str, direction: Decimal
+) -> list[LedgerEvent]:
+    events = []
+    seen_ids = set()
+    for row in rows:
+        if str(row.get("state", "")).upper() != completed_state:
+            continue
+        event_id = _required_text(row, "uuid")
+        if event_id in seen_ids:
+            continue
+        seen_ids.add(event_id)
+        currency = _required_text(row, "currency").upper()
+        amount = _number(row, "amount")
+        occurred_at = _occurred_at(row, "done_at")
+        is_krw = currency == "KRW"
+        events.append(
+            LedgerEvent(
+                provider="upbit",
+                provider_event_id=event_id,
+                occurred_at=occurred_at,
+                event_type=event_type,
+                asset_symbol=None if is_krw else currency,
+                cash_flow_krw=float(amount * direction) if is_krw else 0.0,
+                quantity=None if is_krw else float(amount * direction),
+                external_cash_flow=is_krw,
+            )
+        )
+    return events
+
+
+def parse_upbit_deposits(rows: list[dict]) -> list[LedgerEvent]:
+    return _parse_upbit_transfers(rows, "ACCEPTED", "deposit", Decimal("1"))
+
+
+def parse_upbit_withdraws(rows: list[dict]) -> list[LedgerEvent]:
+    return _parse_upbit_transfers(rows, "DONE", "withdrawal", Decimal("-1"))
 
 
 class UpbitPriceProvider(PriceProvider):
@@ -61,6 +197,35 @@ class UpbitAccountClient:
         response.raise_for_status()
         return response.json()
 
+    def list_closed_orders(
+        self, start_time: str, end_time: str, page: int = 1, limit: int = 100
+    ) -> list[dict]:
+        query = {
+            "start_time": start_time,
+            "end_time": end_time,
+            "page": str(page),
+            "limit": str(limit),
+            "order_by": "asc",
+        }
+        return self._request_list("https://api.upbit.com/v1/orders/closed", query)
+
+    def list_deposits(self, page: int = 1, limit: int = 100) -> list[dict]:
+        query = {"page": str(page), "limit": str(limit)}
+        return self._request_list("https://api.upbit.com/v1/deposits", query)
+
+    def list_withdraws(self, page: int = 1, limit: int = 100) -> list[dict]:
+        query = {"page": str(page), "limit": str(limit)}
+        return self._request_list("https://api.upbit.com/v1/withdraws", query)
+
+    def _request_list(self, url: str, query: Dict[str, str]) -> list[dict]:
+        headers = {"Authorization": f"Bearer {self._jwt_token(query)}"}
+        response = requests.get(url, headers=headers, params=query, timeout=10)
+        response.raise_for_status()
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise ValueError("Upbit response must be a list")
+        return rows
+
     def _jwt_token(self, query: Optional[Dict[str, str]] = None) -> str:
         if jwt is None:
             raise RuntimeError("PyJWT가 설치되어 있지 않습니다. Upbit 계좌조회에는 PyJWT가 필요합니다.")
@@ -70,6 +235,54 @@ class UpbitAccountClient:
             payload["query_hash"] = hashlib.sha512(query_string).hexdigest()
             payload["query_hash_alg"] = "SHA512"
         return jwt.encode(payload, self.secret_key, algorithm="HS256")
+
+
+def _fetch_pages(fetch_page: Callable[[int, int], list[dict]], limit: int) -> list[dict]:
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    rows: list[dict] = []
+    for page in range(1, MAX_PAGES_PER_REQUEST + 1):
+        page_rows = fetch_page(page, limit)
+        rows.extend(page_rows)
+        if len(page_rows) < limit:
+            return rows
+    raise RuntimeError("Upbit page limit reached")
+
+
+def _utc_iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def fetch_upbit_closed_orders(
+    client: UpbitAccountClient, start_time: datetime, end_time: datetime, limit: int = 100
+) -> list[dict]:
+    start = datetime.fromisoformat(_utc_iso(start_time))
+    end = datetime.fromisoformat(_utc_iso(end_time))
+    if start >= end:
+        raise ValueError("start_time must be before end_time")
+    rows: list[dict] = []
+    while start < end:
+        chunk_end = min(start + timedelta(days=7), end)
+        rows.extend(
+            _fetch_pages(
+                lambda page, page_limit: client.list_closed_orders(
+                    start.isoformat(), chunk_end.isoformat(), page, page_limit
+                ),
+                limit,
+            )
+        )
+        start = chunk_end
+    return rows
+
+
+def fetch_upbit_deposits(client: UpbitAccountClient, limit: int = 100) -> list[dict]:
+    return _fetch_pages(client.list_deposits, limit)
+
+
+def fetch_upbit_withdraws(client: UpbitAccountClient, limit: int = 100) -> list[dict]:
+    return _fetch_pages(client.list_withdraws, limit)
 
 
 class UpbitPortfolioProvider(PortfolioProvider):

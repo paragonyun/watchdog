@@ -1,0 +1,30 @@
+[
+  {
+    "uuid": "withdraw-krw",
+    "currency": "KRW",
+    "amount": "10000",
+    "state": "DONE",
+    "done_at": "2026-05-04T10:00:00+09:00"
+  },
+  {
+    "uuid": "withdraw-btc",
+    "currency": "BTC",
+    "amount": "0.002",
+    "state": "DONE",
+    "done_at": "2026-05-04T11:00:00+09:00"
+  },
+  {
+    "uuid": "withdraw-btc",
+    "currency": "BTC",
+    "amount": "0.002",
+    "state": "DONE",
+    "done_at": "2026-05-04T11:00:00+09:00"
+  },
+  {
+    "uuid": "withdraw-cancelled",
+    "currency": "BTC",
+    "amount": "1",
+    "state": "CANCELLED",
+    "done_at": "2026-05-04T12:00:00+09:00"
+  }
+]

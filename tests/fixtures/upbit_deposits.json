@@ -1,0 +1,37 @@
+[
+  {
+    "uuid": "deposit-krw",
+    "currency": "KRW",
+    "amount": "50000",
+    "state": "ACCEPTED",
+    "done_at": "2026-05-03T10:00:00+09:00"
+  },
+  {
+    "uuid": "deposit-btc",
+    "currency": "BTC",
+    "amount": "0.01",
+    "state": "ACCEPTED",
+    "done_at": "2026-05-03T11:00:00+09:00"
+  },
+  {
+    "uuid": "deposit-btc",
+    "currency": "BTC",
+    "amount": "0.01",
+    "state": "ACCEPTED",
+    "done_at": "2026-05-03T11:00:00+09:00"
+  },
+  {
+    "uuid": "deposit-pending",
+    "currency": "BTC",
+    "amount": "1",
+    "state": "PROCESSING",
+    "done_at": null
+  },
+  {
+    "uuid": "deposit-duplicate",
+    "currency": "BTC",
+    "amount": "1",
+    "state": "DUPLICATED",
+    "done_at": "2026-05-03T12:00:00+09:00"
+  }
+]
