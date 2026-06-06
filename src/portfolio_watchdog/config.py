@@ -74,6 +74,13 @@ class SnapshotConfig:
 
 
 @dataclass
+class LedgerConfig:
+    path: str = "snapshots/watchdog.db"
+    reconciliation_quantity_tolerance: float = 1e-8
+    raw_response_retention_days: int = 30
+
+
+@dataclass
 class AppConfig:
     assets: List[AssetConfig]
     price_provider: PriceProviderConfig
@@ -82,6 +89,7 @@ class AppConfig:
     snapshot: SnapshotConfig
     portfolio_provider: PortfolioProviderConfig = field(default_factory=PortfolioProviderConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
+    ledger: LedgerConfig = field(default_factory=LedgerConfig)
 
 
 def load_config(path: Path) -> AppConfig:
@@ -96,6 +104,7 @@ def load_config(path: Path) -> AppConfig:
         alert_settings=_parse_alert_config(raw.get("alerts", {})),
         telegram=_parse_telegram_config(raw.get("telegram", {})),
         snapshot=_parse_snapshot_config(raw.get("snapshot", {})),
+        ledger=_parse_ledger_config(raw.get("ledger", {})),
     )
 
 
@@ -188,6 +197,14 @@ def _parse_telegram_config(raw: Dict[str, Any]) -> TelegramConfig:
 
 def _parse_snapshot_config(raw: Dict[str, Any]) -> SnapshotConfig:
     return SnapshotConfig(path=str(raw.get("path", "snapshots/state.json")), history_path=str(raw.get("history_path", "snapshots/history.json")))
+
+
+def _parse_ledger_config(raw: Dict[str, Any]) -> LedgerConfig:
+    return LedgerConfig(
+        path=str(raw.get("path", "snapshots/watchdog.db")),
+        reconciliation_quantity_tolerance=float(raw.get("reconciliation_quantity_tolerance", 1e-8)),
+        raw_response_retention_days=int(raw.get("raw_response_retention_days", 30)),
+    )
 
 
 def _parse_bool(value: Any) -> bool:
