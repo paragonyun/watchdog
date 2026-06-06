@@ -4,6 +4,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import unquote, urlencode
 
@@ -206,13 +207,26 @@ class UpbitPriceProvider(PriceProvider):
 
 
 class UpbitAccountClient:
-    def __init__(self, access_key: str, secret_key: str) -> None:
+    def __init__(
+        self,
+        access_key: str,
+        secret_key: str,
+        request_interval_seconds: float = 1 / 30,
+        sleep_func: Callable[[float], None] = time.sleep,
+        monotonic_func: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if request_interval_seconds < 0:
+            raise ValueError("request_interval_seconds must be non-negative")
         self.access_key = access_key
         self.secret_key = secret_key
+        self.request_interval_seconds = request_interval_seconds
+        self.sleep_func = sleep_func
+        self.monotonic_func = monotonic_func
+        self._last_request_at: Optional[float] = None
+        self._request_lock = Lock()
 
     def get_accounts(self) -> List[Dict]:
-        headers = {"Authorization": f"Bearer {self._jwt_token()}"}
-        response = requests.get("https://api.upbit.com/v1/accounts", headers=headers, timeout=10)
+        response = self._authenticated_get("https://api.upbit.com/v1/accounts")
         response.raise_for_status()
         return response.json()
 
@@ -230,10 +244,7 @@ class UpbitAccountClient:
 
     def get_order(self, order_uuid: str) -> dict:
         query = {"uuid": _required_text({"uuid": order_uuid}, "uuid")}
-        headers = {"Authorization": f"Bearer {self._jwt_token(query)}"}
-        response = requests.get(
-            "https://api.upbit.com/v1/order", headers=headers, params=query, timeout=10
-        )
+        response = self._authenticated_get("https://api.upbit.com/v1/order", query)
         response.raise_for_status()
         order = response.json()
         if not isinstance(order, dict):
@@ -251,13 +262,27 @@ class UpbitAccountClient:
         return self._request_list("https://api.upbit.com/v1/withdraws", query)
 
     def _request_list(self, url: str, query: Dict[str, Any]) -> list[dict]:
-        headers = {"Authorization": f"Bearer {self._jwt_token(query)}"}
-        response = requests.get(url, headers=headers, params=query, timeout=10)
+        response = self._authenticated_get(url, query)
         response.raise_for_status()
         rows = response.json()
         if not isinstance(rows, list):
             raise ValueError("Upbit response must be a list")
         return rows
+
+    def _authenticated_get(self, url: str, query: Optional[Dict[str, Any]] = None):
+        headers = {"Authorization": f"Bearer {self._jwt_token(query)}"}
+        kwargs = {"headers": headers, "timeout": 10}
+        if query is not None:
+            kwargs["params"] = query
+        with self._request_lock:
+            now = self.monotonic_func()
+            if self._last_request_at is not None:
+                remaining = self.request_interval_seconds - (now - self._last_request_at)
+                if remaining > 0:
+                    self.sleep_func(remaining)
+                    now = self.monotonic_func()
+            self._last_request_at = now
+            return requests.get(url, **kwargs)
 
     def _jwt_token(self, query: Optional[Dict[str, Any]] = None) -> str:
         if jwt is None:
@@ -322,12 +347,8 @@ def fetch_upbit_closed_orders(
     start_time: datetime,
     end_time: datetime,
     limit: int = 100,
-    sleep_func: Callable[[float], None] = time.sleep,
-    detail_request_interval_seconds: float = 1 / 30,
 ) -> list[dict]:
     _validate_closed_order_limit(limit)
-    if detail_request_interval_seconds < 0:
-        raise ValueError("detail_request_interval_seconds must be non-negative")
     start = datetime.fromisoformat(_utc_iso(start_time))
     end = datetime.fromisoformat(_utc_iso(end_time))
     if start >= end:
@@ -344,8 +365,6 @@ def fetch_upbit_closed_orders(
         if order_id in seen_order_ids:
             continue
         seen_order_ids.add(order_id)
-        if details:
-            sleep_func(detail_request_interval_seconds)
         details.append(client.get_order(order_id))
     return details
 

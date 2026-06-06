@@ -213,6 +213,54 @@ def test_upbit_account_client_get_order_uses_uuid_and_validates_object(monkeypat
         client.get_order("order-1")
 
 
+def test_upbit_account_client_throttles_mixed_authenticated_get_requests(monkeypatch) -> None:
+    now = [10.0]
+    sleeps = []
+    request_times = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    def get(url, **kwargs):
+        request_times.append(now[0])
+        return Response({} if url.endswith("/order") else [])
+
+    monkeypatch.setattr(upbit.jwt, "encode", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(upbit.requests, "get", get)
+    client = UpbitAccountClient(
+        "access",
+        "secret",
+        request_interval_seconds=0.5,
+        sleep_func=sleep,
+        monotonic_func=lambda: now[0],
+    )
+
+    client.get_accounts()
+    now[0] += 0.2
+    client.list_closed_orders("start", "end")
+    now[0] += 0.6
+    client.get_order("order-1")
+    client.list_deposits()
+    now[0] += 0.25
+    client.list_withdraws()
+
+    assert request_times == pytest.approx([10.0, 10.5, 11.1, 11.6, 12.1])
+    assert sleeps == pytest.approx([0.3, 0.5, 0.25])
+
+
+def test_upbit_account_client_interval_zero_never_sleeps(monkeypatch) -> None:
+    sleeps = []
+    monkeypatch.setattr(upbit.jwt, "encode", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(upbit.requests, "get", lambda *args, **kwargs: Response([]))
+    client = UpbitAccountClient("access", "secret", request_interval_seconds=0, sleep_func=sleeps.append)
+
+    client.get_accounts()
+    client.list_deposits()
+
+    assert sleeps == []
+
+
 @pytest.mark.parametrize("limit", [0, 1001])
 def test_upbit_closed_orders_rejects_limit_outside_official_range(monkeypatch, limit) -> None:
     monkeypatch.setattr(upbit.requests, "get", lambda *args, **kwargs: pytest.fail("network called"))
@@ -310,26 +358,38 @@ def test_fetch_upbit_closed_orders_expands_official_list_fixture_without_trades(
     assert [row["uuid"] for row in fetched] == ["order-1", "order-2", "order-empty"]
 
 
-def test_fetch_upbit_closed_orders_sleeps_between_detail_requests() -> None:
+def test_fetch_upbit_closed_orders_uses_client_throttle_without_helper_double_sleep(monkeypatch) -> None:
+    now = [10.0]
     sleeps = []
+    summaries = _fixture("upbit_closed_orders.json")[:2]
     details = {row["uuid"]: row for row in _fixture("upbit_order_details.json")}
 
-    class Client:
-        def list_closed_orders(self, start_time, end_time, limit=100):
-            return _fixture("upbit_closed_orders.json")
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
 
-        def get_order(self, order_uuid):
-            return details[order_uuid]
+    def get(url, **kwargs):
+        if url.endswith("/orders/closed"):
+            return Response(summaries)
+        return Response(details[kwargs["params"]["uuid"]])
 
-    fetched = fetch_upbit_closed_orders(
-        Client(),
-        datetime(2026, 5, 1, tzinfo=UTC),
-        datetime(2026, 5, 2, tzinfo=UTC),
-        sleep_func=sleeps.append,
-        detail_request_interval_seconds=0.25,
+    monkeypatch.setattr(upbit.jwt, "encode", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(upbit.requests, "get", get)
+    client = UpbitAccountClient(
+        "access",
+        "secret",
+        request_interval_seconds=0.25,
+        sleep_func=sleep,
+        monotonic_func=lambda: now[0],
     )
 
-    assert len(fetched) == 3
+    fetched = fetch_upbit_closed_orders(
+        client,
+        datetime(2026, 5, 1, tzinfo=UTC),
+        datetime(2026, 5, 2, tzinfo=UTC),
+    )
+
+    assert len(fetched) == 2
     assert sleeps == [0.25, 0.25]
 
 
