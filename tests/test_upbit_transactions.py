@@ -45,13 +45,26 @@ def test_parse_upbit_closed_orders_emits_one_event_per_trade_with_fee_and_direct
 
 
 def test_parse_upbit_closed_orders_ignores_order_without_trades() -> None:
-    empty_order = {key: value for key, value in _fixture("upbit_order_details.json")[-1].items() if key != "trades"}
+    empty_order = _fixture("upbit_order_details.json")[-1]
     assert parse_upbit_closed_orders([empty_order]) == []
 
 
 def test_parse_upbit_closed_orders_dedupes_detail_event_ids() -> None:
     detail = _fixture("upbit_order_details.json")[0]
     assert len(parse_upbit_closed_orders([detail, detail])) == 2
+
+
+def test_parse_upbit_closed_orders_allows_missing_trades_count() -> None:
+    detail = {key: value for key, value in _fixture("upbit_order_details.json")[0].items() if key != "trades_count"}
+    assert len(parse_upbit_closed_orders([detail])) == 2
+
+
+@pytest.mark.parametrize("trades_count", [0, 3])
+def test_parse_upbit_closed_orders_rejects_trades_count_mismatch(trades_count) -> None:
+    detail = {**_fixture("upbit_order_details.json")[0], "trades_count": trades_count}
+
+    with pytest.raises(ValueError, match="trades_count"):
+        parse_upbit_closed_orders([detail])
 
 
 @pytest.mark.parametrize(
@@ -101,6 +114,7 @@ def test_parse_upbit_deposits_and_withdraws_only_emit_completed_flows() -> None:
         (50000.0, None, True),
         (0.0, 0.01, False),
     ]
+    assert all(event.fee_krw == 0 for event in deposits)
     assert [(event.provider_event_id, event.event_type) for event in withdraws] == [
         ("withdraw-krw", "withdrawal"),
         ("withdraw-btc", "withdrawal"),
@@ -208,6 +222,26 @@ def test_upbit_closed_orders_rejects_limit_outside_official_range(monkeypatch, l
         fetch_upbit_closed_orders(object(), datetime(2026, 1, 1), datetime(2026, 1, 2), limit=limit)
 
 
+@pytest.mark.parametrize(
+    ("method", "page", "limit"),
+    [
+        ("list_deposits", 0, 100),
+        ("list_deposits", 1, 0),
+        ("list_deposits", 1, 101),
+        ("list_withdraws", 0, 100),
+        ("list_withdraws", 1, 0),
+        ("list_withdraws", 1, 101),
+    ],
+)
+def test_upbit_transfer_lists_reject_invalid_page_or_limit_without_request(
+    monkeypatch, method, page, limit
+) -> None:
+    monkeypatch.setattr(upbit.requests, "get", lambda *args, **kwargs: pytest.fail("network called"))
+
+    with pytest.raises(ValueError):
+        getattr(UpbitAccountClient("access", "secret"), method)(page=page, limit=limit)
+
+
 def test_upbit_account_client_propagates_requests_errors(monkeypatch) -> None:
     error = requests.Timeout("private response detail")
     monkeypatch.setattr(upbit.jwt, "encode", lambda *args, **kwargs: "token")
@@ -274,6 +308,29 @@ def test_fetch_upbit_closed_orders_expands_official_list_fixture_without_trades(
         datetime(2026, 5, 2, tzinfo=UTC),
     )
     assert [row["uuid"] for row in fetched] == ["order-1", "order-2", "order-empty"]
+
+
+def test_fetch_upbit_closed_orders_sleeps_between_detail_requests() -> None:
+    sleeps = []
+    details = {row["uuid"]: row for row in _fixture("upbit_order_details.json")}
+
+    class Client:
+        def list_closed_orders(self, start_time, end_time, limit=100):
+            return _fixture("upbit_closed_orders.json")
+
+        def get_order(self, order_uuid):
+            return details[order_uuid]
+
+    fetched = fetch_upbit_closed_orders(
+        Client(),
+        datetime(2026, 5, 1, tzinfo=UTC),
+        datetime(2026, 5, 2, tzinfo=UTC),
+        sleep_func=sleeps.append,
+        detail_request_interval_seconds=0.25,
+    )
+
+    assert len(fetched) == 3
+    assert sleeps == [0.25, 0.25]
 
 
 def test_fetch_upbit_closed_orders_treats_naive_datetimes_as_utc() -> None:

@@ -65,7 +65,12 @@ def parse_upbit_closed_orders(rows: list[dict]) -> list[LedgerEvent]:
     seen_event_ids = set()
     for order in rows:
         order_id = _required_text(order, "uuid")
-        if _integer(order, "trades_count") == 0:
+        trades = order.get("trades")
+        if not isinstance(trades, list):
+            raise ValueError("Upbit trades must be a list")
+        if "trades_count" in order and len(trades) != _integer(order, "trades_count"):
+            raise ValueError("Upbit trades_count must match trades length")
+        if not trades:
             continue
         market = _required_text(order, "market")
         if not market.startswith("KRW-") or len(market) == 4:
@@ -75,10 +80,6 @@ def parse_upbit_closed_orders(rows: list[dict]) -> list[LedgerEvent]:
         if side not in {"bid", "ask"}:
             raise ValueError("Upbit side must be bid or ask")
         paid_fee = _number(order, "paid_fee")
-        trades = order.get("trades")
-        if not isinstance(trades, list):
-            raise ValueError("Upbit trades must be a list")
-
         parsed_trades = []
         for trade in trades:
             parsed_trades.append(
@@ -240,10 +241,12 @@ class UpbitAccountClient:
         return order
 
     def list_deposits(self, page: int = 1, limit: int = 100) -> list[dict]:
+        _validate_transfer_page_limit(page, limit)
         query = {"page": str(page), "limit": str(limit)}
         return self._request_list("https://api.upbit.com/v1/deposits", query)
 
     def list_withdraws(self, page: int = 1, limit: int = 100) -> list[dict]:
+        _validate_transfer_page_limit(page, limit)
         query = {"page": str(page), "limit": str(limit)}
         return self._request_list("https://api.upbit.com/v1/withdraws", query)
 
@@ -291,6 +294,13 @@ def _validate_closed_order_limit(limit: int) -> None:
         raise ValueError("limit must be between 1 and 1000")
 
 
+def _validate_transfer_page_limit(page: int, limit: int) -> None:
+    if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+        raise ValueError("page must be at least 1")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+
+
 def _fetch_closed_order_window(
     client: UpbitAccountClient, start: datetime, end: datetime, limit: int
 ) -> list[dict]:
@@ -308,9 +318,16 @@ def _fetch_closed_order_window(
 
 
 def fetch_upbit_closed_orders(
-    client: UpbitAccountClient, start_time: datetime, end_time: datetime, limit: int = 100
+    client: UpbitAccountClient,
+    start_time: datetime,
+    end_time: datetime,
+    limit: int = 100,
+    sleep_func: Callable[[float], None] = time.sleep,
+    detail_request_interval_seconds: float = 1 / 30,
 ) -> list[dict]:
     _validate_closed_order_limit(limit)
+    if detail_request_interval_seconds < 0:
+        raise ValueError("detail_request_interval_seconds must be non-negative")
     start = datetime.fromisoformat(_utc_iso(start_time))
     end = datetime.fromisoformat(_utc_iso(end_time))
     if start >= end:
@@ -327,6 +344,8 @@ def fetch_upbit_closed_orders(
         if order_id in seen_order_ids:
             continue
         seen_order_ids.add(order_id)
+        if details:
+            sleep_func(detail_request_interval_seconds)
         details.append(client.get_order(order_id))
     return details
 
