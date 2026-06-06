@@ -27,6 +27,6 @@ def assert_cloud_safe(value: Any, path: str = "$") -> None:
             if isinstance(key, str) and key.lower() in FORBIDDEN_CLOUD_FIELDS:
                 raise ValueError(f"forbidden cloud field: {item_path}")
             assert_cloud_safe(item, item_path)
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             assert_cloud_safe(item, f"{path}[{index}]")

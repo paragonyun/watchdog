@@ -37,6 +37,11 @@ def test_assert_cloud_safe_compares_keys_in_lowercase() -> None:
         assert_cloud_safe({"API_KEY": "private"})
 
 
+def test_assert_cloud_safe_rejects_forbidden_fields_inside_tuple() -> None:
+    with pytest.raises(ValueError, match=r"^forbidden cloud field: \$\.outer\[0\]\.api_key$"):
+        assert_cloud_safe({"outer": ({"api_key": "private"},)})
+
+
 def test_assert_cloud_safe_allows_safe_dashboard_payload_v2() -> None:
     payload = {
         "schema_version": "dashboard_payload_v2",
