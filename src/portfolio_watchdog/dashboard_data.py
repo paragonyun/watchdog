@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .cloud_contract import assert_cloud_safe
 from .report_data import load_report_payload_for_path
 
 
@@ -42,6 +43,7 @@ def upload_dashboard_payload(payload: Dict[str, Any], endpoint: Optional[str], t
         raise ValueError("WATCHDOG_DASHBOARD_UPLOAD_URL 환경 변수가 필요합니다.")
     if not token:
         raise ValueError("WATCHDOG_UPLOAD_TOKEN 환경 변수가 필요합니다.")
+    assert_cloud_safe(payload)
     try:
         response = requests.post(
             endpoint,
