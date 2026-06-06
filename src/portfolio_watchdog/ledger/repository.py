@@ -1,11 +1,14 @@
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
 from portfolio_watchdog.ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
-from portfolio_watchdog.ledger.schema import SCHEMA_SQL, SCHEMA_VERSION
+from portfolio_watchdog.ledger.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
+
+
+BUSY_TIMEOUT_MS = 5000
 
 
 class LedgerRepository:
@@ -13,55 +16,60 @@ class LedgerRepository:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            connection.executescript(SCHEMA_SQL)
-            connection.execute(
-                "INSERT INTO schema_version(version) "
-                "SELECT ? WHERE NOT EXISTS (SELECT 1 FROM schema_version)",
-                (SCHEMA_VERSION,),
-            )
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(SCHEMA_STATEMENTS[0])
+            versions = connection.execute("SELECT version FROM schema_version").fetchall()
+            if not versions:
+                connection.execute(
+                    "INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,)
+                )
+            elif len(versions) != 1 or versions[0]["version"] != SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Unsupported ledger schema version rows: "
+                    f"{[row['version'] for row in versions]}"
+                )
+            for statement in SCHEMA_STATEMENTS[1:]:
+                connection.execute(statement)
 
     def upsert_event(self, event: LedgerEvent) -> bool:
+        values = (
+            event.provider,
+            event.provider_event_id,
+            _utc_iso(event.occurred_at),
+            event.event_type,
+            event.asset_symbol,
+            event.cash_flow_krw,
+            event.quantity,
+            event.unit_price_krw,
+            event.fee_krw,
+            int(event.external_cash_flow),
+            event.memo,
+        )
         with self._connect() as connection:
-            is_new = (
-                connection.execute(
-                    "SELECT 1 FROM ledger_events WHERE provider = ? AND provider_event_id = ?",
-                    (event.provider, event.provider_event_id),
-                ).fetchone()
-                is None
-            )
-            connection.execute(
+            inserted = connection.execute(
                 """
                 INSERT INTO ledger_events (
                     provider, provider_event_id, occurred_at, event_type, asset_symbol,
                     cash_flow_krw, quantity, unit_price_krw, fee_krw,
                     external_cash_flow, memo
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(provider, provider_event_id) DO UPDATE SET
-                    occurred_at = excluded.occurred_at,
-                    event_type = excluded.event_type,
-                    asset_symbol = excluded.asset_symbol,
-                    cash_flow_krw = excluded.cash_flow_krw,
-                    quantity = excluded.quantity,
-                    unit_price_krw = excluded.unit_price_krw,
-                    fee_krw = excluded.fee_krw,
-                    external_cash_flow = excluded.external_cash_flow,
-                    memo = excluded.memo
+                ON CONFLICT(provider, provider_event_id) DO NOTHING
+                RETURNING 1
                 """,
-                (
-                    event.provider,
-                    event.provider_event_id,
-                    event.occurred_at.isoformat(),
-                    event.event_type,
-                    event.asset_symbol,
-                    event.cash_flow_krw,
-                    event.quantity,
-                    event.unit_price_krw,
-                    event.fee_krw,
-                    int(event.external_cash_flow),
-                    event.memo,
-                ),
-            )
-        return is_new
+                values,
+            ).fetchone()
+            if inserted is None:
+                connection.execute(
+                    """
+                    UPDATE ledger_events SET
+                        occurred_at = ?, event_type = ?, asset_symbol = ?,
+                        cash_flow_krw = ?, quantity = ?, unit_price_krw = ?,
+                        fee_krw = ?, external_cash_flow = ?, memo = ?
+                    WHERE provider = ? AND provider_event_id = ?
+                    """,
+                    (*values[2:], values[0], values[1]),
+                )
+        return inserted is not None
 
     def list_events(
         self, since: Optional[datetime] = None, until: Optional[datetime] = None
@@ -70,10 +78,10 @@ class LedgerRepository:
         parameters = []
         if since is not None:
             clauses.append("occurred_at >= ?")
-            parameters.append(since.isoformat())
+            parameters.append(_utc_iso(since))
         if until is not None:
             clauses.append("occurred_at <= ?")
-            parameters.append(until.isoformat())
+            parameters.append(_utc_iso(until))
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as connection:
             rows = connection.execute(
@@ -86,7 +94,7 @@ class LedgerRepository:
             LedgerEvent(
                 provider=row["provider"],
                 provider_event_id=row["provider_event_id"],
-                occurred_at=datetime.fromisoformat(row["occurred_at"]),
+                occurred_at=_from_utc_iso(row["occurred_at"]),
                 event_type=row["event_type"],
                 asset_symbol=row["asset_symbol"],
                 cash_flow_krw=row["cash_flow_krw"],
@@ -100,36 +108,37 @@ class LedgerRepository:
         ]
 
     def upsert_account_snapshot(self, snapshot: AccountSnapshot) -> bool:
+        values = (
+            snapshot.provider,
+            _utc_iso(snapshot.captured_at),
+            snapshot.total_value_krw,
+            snapshot.data_status,
+        )
         with self._connect() as connection:
-            is_new = (
-                connection.execute(
-                    "SELECT 1 FROM account_snapshots WHERE provider = ? AND captured_at = ?",
-                    (snapshot.provider, snapshot.captured_at.isoformat()),
-                ).fetchone()
-                is None
-            )
-            connection.execute(
+            inserted = connection.execute(
                 """
                 INSERT INTO account_snapshots(provider, captured_at, total_value_krw, data_status)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(provider, captured_at) DO UPDATE SET
-                    total_value_krw = excluded.total_value_krw,
-                    data_status = excluded.data_status
+                ON CONFLICT(provider, captured_at) DO NOTHING
+                RETURNING 1
                 """,
-                (
-                    snapshot.provider,
-                    snapshot.captured_at.isoformat(),
-                    snapshot.total_value_krw,
-                    snapshot.data_status,
-                ),
-            )
-        return is_new
+                values,
+            ).fetchone()
+            if inserted is None:
+                connection.execute(
+                    """
+                    UPDATE account_snapshots SET total_value_krw = ?, data_status = ?
+                    WHERE provider = ? AND captured_at = ?
+                    """,
+                    (*values[2:], *values[:2]),
+                )
+        return inserted is not None
 
     def list_account_snapshots(
         self, since: Optional[datetime] = None
     ) -> list[AccountSnapshot]:
         where = " WHERE captured_at >= ?" if since is not None else ""
-        parameters = (since.isoformat(),) if since is not None else ()
+        parameters = (_utc_iso(since),) if since is not None else ()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT provider, captured_at, total_value_krw, data_status "
@@ -139,7 +148,7 @@ class LedgerRepository:
         return [
             AccountSnapshot(
                 provider=row["provider"],
-                captured_at=datetime.fromisoformat(row["captured_at"]),
+                captured_at=_from_utc_iso(row["captured_at"]),
                 total_value_krw=row["total_value_krw"],
                 data_status=row["data_status"],
             )
@@ -147,52 +156,46 @@ class LedgerRepository:
         ]
 
     def upsert_asset_snapshot(self, snapshot: AssetSnapshot) -> bool:
+        values = (
+            snapshot.provider,
+            _utc_iso(snapshot.captured_at),
+            snapshot.asset_symbol,
+            snapshot.asset_type,
+            snapshot.value_krw,
+            snapshot.quantity,
+            snapshot.unit_price_krw,
+            snapshot.average_buy_price_krw,
+            snapshot.data_status,
+        )
         with self._connect() as connection:
-            is_new = (
-                connection.execute(
-                    "SELECT 1 FROM asset_snapshots "
-                    "WHERE provider = ? AND captured_at = ? AND asset_symbol = ?",
-                    (
-                        snapshot.provider,
-                        snapshot.captured_at.isoformat(),
-                        snapshot.asset_symbol,
-                    ),
-                ).fetchone()
-                is None
-            )
-            connection.execute(
+            inserted = connection.execute(
                 """
                 INSERT INTO asset_snapshots(
                     provider, captured_at, asset_symbol, asset_type, value_krw,
                     quantity, unit_price_krw, average_buy_price_krw, data_status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(provider, captured_at, asset_symbol) DO UPDATE SET
-                    asset_type = excluded.asset_type,
-                    value_krw = excluded.value_krw,
-                    quantity = excluded.quantity,
-                    unit_price_krw = excluded.unit_price_krw,
-                    average_buy_price_krw = excluded.average_buy_price_krw,
-                    data_status = excluded.data_status
+                ON CONFLICT(provider, captured_at, asset_symbol) DO NOTHING
+                RETURNING 1
                 """,
-                (
-                    snapshot.provider,
-                    snapshot.captured_at.isoformat(),
-                    snapshot.asset_symbol,
-                    snapshot.asset_type,
-                    snapshot.value_krw,
-                    snapshot.quantity,
-                    snapshot.unit_price_krw,
-                    snapshot.average_buy_price_krw,
-                    snapshot.data_status,
-                ),
-            )
-        return is_new
+                values,
+            ).fetchone()
+            if inserted is None:
+                connection.execute(
+                    """
+                    UPDATE asset_snapshots SET
+                        asset_type = ?, value_krw = ?, quantity = ?, unit_price_krw = ?,
+                        average_buy_price_krw = ?, data_status = ?
+                    WHERE provider = ? AND captured_at = ? AND asset_symbol = ?
+                    """,
+                    (*values[3:], *values[:3]),
+                )
+        return inserted is not None
 
     def list_asset_snapshots(
         self, captured_at: Optional[datetime] = None
     ) -> list[AssetSnapshot]:
         where = " WHERE captured_at = ?" if captured_at is not None else ""
-        parameters = (captured_at.isoformat(),) if captured_at is not None else ()
+        parameters = (_utc_iso(captured_at),) if captured_at is not None else ()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT provider, captured_at, asset_symbol, asset_type, value_krw, "
@@ -203,7 +206,7 @@ class LedgerRepository:
         return [
             AssetSnapshot(
                 provider=row["provider"],
-                captured_at=datetime.fromisoformat(row["captured_at"]),
+                captured_at=_from_utc_iso(row["captured_at"]),
                 asset_symbol=row["asset_symbol"],
                 asset_type=row["asset_type"],
                 value_krw=row["value_krw"],
@@ -235,7 +238,7 @@ class LedgerRepository:
                     cursor_value = excluded.cursor_value,
                     updated_at = excluded.updated_at
                 """,
-                (provider, stream, cursor_value, updated_at.isoformat()),
+                (provider, stream, cursor_value, _utc_iso(updated_at)),
             )
 
     @contextmanager
@@ -244,9 +247,22 @@ class LedgerRepository:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         try:
             with connection:
                 yield connection
         finally:
             connection.close()
+
+
+def _utc_iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _from_utc_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

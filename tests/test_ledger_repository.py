@@ -1,11 +1,32 @@
 import sqlite3
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from threading import Barrier
 
 import pytest
 
 from portfolio_watchdog.config import LedgerConfig, load_config
 from portfolio_watchdog.ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
-from portfolio_watchdog.ledger.repository import LedgerRepository
+from portfolio_watchdog.ledger.repository import BUSY_TIMEOUT_MS, LedgerRepository
+from portfolio_watchdog.ledger.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
+
+
+UTC = timezone.utc
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _call_concurrently(function, value):
+    barrier = Barrier(2)
+
+    def call(_):
+        barrier.wait()
+        return function(value)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        return list(executor.map(call, range(2)))
 
 
 def _event(**overrides) -> LedgerEvent:
@@ -28,12 +49,13 @@ def _event(**overrides) -> LedgerEvent:
 
 def test_ledger_repository_initializes_schema_and_connection_settings(tmp_path) -> None:
     path = tmp_path / "nested" / "watchdog.db"
-    LedgerRepository(path)
+    repository = LedgerRepository(path)
 
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT version FROM schema_version").fetchall() == [(1,)]
+        assert connection.execute("SELECT version FROM schema_version").fetchall() == [
+            (SCHEMA_VERSION,)
+        ]
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         tables = {
             row[0]
             for row in connection.execute(
@@ -47,6 +69,46 @@ def test_ledger_repository_initializes_schema_and_connection_settings(tmp_path) 
         "asset_snapshots",
         "collection_cursors",
     } <= tables
+
+    with repository._connect() as connection:
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,)
+            )
+
+
+def test_schema_initialization_rolls_back_on_failure(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "watchdog.db"
+    monkeypatch.setattr(
+        "portfolio_watchdog.ledger.repository.SCHEMA_STATEMENTS",
+        (*SCHEMA_STATEMENTS, "CREATE TABLE broken("),
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        LedgerRepository(path)
+
+    with sqlite3.connect(path) as connection:
+        tables = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    assert tables == []
+
+
+@pytest.mark.parametrize("versions", [[0], [SCHEMA_VERSION + 1], [SCHEMA_VERSION, SCHEMA_VERSION]])
+def test_schema_initialization_rejects_invalid_version_rows(tmp_path, versions) -> None:
+    path = tmp_path / "watchdog.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE schema_version(version INTEGER NOT NULL)")
+        connection.executemany(
+            "INSERT INTO schema_version(version) VALUES (?)",
+            [(version,) for version in versions],
+        )
+
+    with pytest.raises(RuntimeError, match="schema version"):
+        LedgerRepository(path)
 
 
 def test_repository_closes_connections_after_transactions(tmp_path, monkeypatch) -> None:
@@ -84,7 +146,19 @@ def test_upsert_event_is_idempotent_and_updates_mutable_detail(tmp_path) -> None
     assert repository.upsert_event(original) is True
     assert repository.upsert_event(original) is False
     assert repository.upsert_event(revised) is False
-    assert repository.list_events() == [revised]
+    assert repository.list_events() == [
+        LedgerEvent(**{**revised.__dict__, "occurred_at": _utc(revised.occurred_at)})
+    ]
+
+
+def test_concurrent_event_upsert_returns_true_exactly_once(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    event = _event()
+
+    results = _call_concurrently(repository.upsert_event, event)
+
+    assert sorted(results) == [False, True]
+    assert len(repository.list_events()) == 1
 
 
 def test_list_events_filters_restores_datetime_and_orders_ascending(tmp_path) -> None:
@@ -95,11 +169,88 @@ def test_list_events_filters_restores_datetime_and_orders_ascending(tmp_path) ->
     for event in (later, earlier, middle):
         repository.upsert_event(event)
 
-    assert repository.list_events() == [earlier, middle, later]
-    assert repository.list_events(since=middle.occurred_at, until=later.occurred_at) == [
-        middle,
-        later,
+    assert repository.list_events() == [
+        LedgerEvent(**{**event.__dict__, "occurred_at": _utc(event.occurred_at)})
+        for event in (earlier, middle, later)
     ]
+    assert repository.list_events(since=middle.occurred_at, until=later.occurred_at) == [
+        LedgerEvent(**{**event.__dict__, "occurred_at": _utc(event.occurred_at)})
+        for event in (middle, later)
+    ]
+
+
+def test_event_datetimes_are_normalized_to_utc_for_storage_sorting_and_filters(tmp_path) -> None:
+    path = tmp_path / "watchdog.db"
+    repository = LedgerRepository(path)
+    same_instant_offset = _event(
+        provider_event_id="same-offset",
+        occurred_at=datetime(2026, 6, 6, 17, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    same_instant_naive = _event(
+        provider_event_id="same-naive",
+        occurred_at=datetime(2026, 6, 6, 8, 0),
+    )
+    later = _event(
+        provider_event_id="later",
+        occurred_at=datetime(2026, 6, 6, 5, 30, tzinfo=timezone(timedelta(hours=-3))),
+    )
+    for event in (later, same_instant_offset, same_instant_naive):
+        repository.upsert_event(event)
+
+    events = repository.list_events(
+        since=datetime(2026, 6, 6, 16, 59, tzinfo=timezone(timedelta(hours=9)))
+    )
+
+    assert [event.provider_event_id for event in events] == [
+        "same-offset",
+        "same-naive",
+        "later",
+    ]
+    assert [event.occurred_at for event in events] == [
+        datetime(2026, 6, 6, 8, 0, tzinfo=UTC),
+        datetime(2026, 6, 6, 8, 0, tzinfo=UTC),
+        datetime(2026, 6, 6, 8, 30, tzinfo=UTC),
+    ]
+    with sqlite3.connect(path) as connection:
+        stored = connection.execute(
+            "SELECT occurred_at FROM ledger_events ORDER BY occurred_at, id"
+        ).fetchall()
+    assert stored == [
+        ("2026-06-06T08:00:00+00:00",),
+        ("2026-06-06T08:00:00+00:00",),
+        ("2026-06-06T08:30:00+00:00",),
+    ]
+
+
+def test_naive_stored_datetime_is_restored_as_utc(tmp_path) -> None:
+    path = tmp_path / "watchdog.db"
+    repository = LedgerRepository(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            INSERT INTO ledger_events(
+                provider, provider_event_id, occurred_at, event_type, asset_symbol,
+                cash_flow_krw, quantity, unit_price_krw, fee_krw, external_cash_flow, memo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "upbit",
+                "legacy-naive",
+                "2026-06-06T08:00:00",
+                "buy",
+                "BTC",
+                -100_000,
+                0.001,
+                100_000_000,
+                500,
+                0,
+                None,
+            ),
+        )
+
+    assert repository.list_events()[0].occurred_at == datetime(
+        2026, 6, 6, 8, 0, tzinfo=UTC
+    )
 
 
 def test_ledger_repository_stores_sensitive_event_detail_locally(tmp_path) -> None:
@@ -123,8 +274,23 @@ def test_account_snapshot_upsert_and_list(tmp_path) -> None:
     assert repository.upsert_account_snapshot(earlier) is True
     assert repository.upsert_account_snapshot(revised) is False
     assert repository.upsert_account_snapshot(later) is True
-    assert repository.list_account_snapshots() == [revised, later]
-    assert repository.list_account_snapshots(since=later.captured_at) == [later]
+    assert repository.list_account_snapshots() == [
+        AccountSnapshot(**{**snapshot.__dict__, "captured_at": _utc(snapshot.captured_at)})
+        for snapshot in (revised, later)
+    ]
+    assert repository.list_account_snapshots(since=later.captured_at) == [
+        AccountSnapshot(**{**later.__dict__, "captured_at": _utc(later.captured_at)})
+    ]
+
+
+def test_concurrent_account_snapshot_upsert_returns_true_exactly_once(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    snapshot = AccountSnapshot("upbit", datetime(2026, 6, 6, 8, 0), 100_000, "actual")
+
+    results = _call_concurrently(repository.upsert_account_snapshot, snapshot)
+
+    assert sorted(results) == [False, True]
+    assert len(repository.list_account_snapshots()) == 1
 
 
 def test_asset_snapshot_upsert_and_list(tmp_path) -> None:
@@ -143,18 +309,67 @@ def test_asset_snapshot_upsert_and_list(tmp_path) -> None:
     assert repository.upsert_asset_snapshot(btc) is True
     assert repository.upsert_asset_snapshot(revised_btc) is False
     assert repository.upsert_asset_snapshot(eth) is True
-    assert repository.list_asset_snapshots() == [revised_btc, eth]
-    assert repository.list_asset_snapshots(captured_at=captured_at) == [revised_btc]
+    assert repository.list_asset_snapshots() == [
+        AssetSnapshot(**{**snapshot.__dict__, "captured_at": _utc(snapshot.captured_at)})
+        for snapshot in (revised_btc, eth)
+    ]
+    assert repository.list_asset_snapshots(captured_at=captured_at) == [
+        AssetSnapshot(**{**revised_btc.__dict__, "captured_at": _utc(captured_at)})
+    ]
+
+
+def test_concurrent_asset_snapshot_upsert_returns_true_exactly_once(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    snapshot = AssetSnapshot(
+        "upbit",
+        datetime(2026, 6, 6, 8, 0),
+        "BTC",
+        "coin",
+        100_000,
+        0.001,
+        100_000_000,
+        90_000_000,
+        "actual",
+    )
+
+    results = _call_concurrently(repository.upsert_asset_snapshot, snapshot)
+
+    assert sorted(results) == [False, True]
+    assert len(repository.list_asset_snapshots()) == 1
+
+
+def test_snapshot_same_instant_with_different_offsets_is_one_unique_row(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    utc_snapshot = AccountSnapshot(
+        "upbit", datetime(2026, 6, 6, 8, 0, tzinfo=UTC), 100_000, "actual"
+    )
+    offset_snapshot = AccountSnapshot(
+        "upbit",
+        datetime(2026, 6, 6, 17, 0, tzinfo=timezone(timedelta(hours=9))),
+        110_000,
+        "partial",
+    )
+
+    assert repository.upsert_account_snapshot(utc_snapshot) is True
+    assert repository.upsert_account_snapshot(offset_snapshot) is False
+    assert repository.list_account_snapshots() == [
+        AccountSnapshot("upbit", datetime(2026, 6, 6, 8, 0, tzinfo=UTC), 110_000, "partial")
+    ]
 
 
 def test_cursor_round_trip_and_update(tmp_path) -> None:
-    repository = LedgerRepository(tmp_path / "watchdog.db")
+    path = tmp_path / "watchdog.db"
+    repository = LedgerRepository(path)
 
     assert repository.get_cursor("upbit", "orders") is None
     repository.set_cursor("upbit", "orders", "cursor-1", datetime(2026, 6, 6, 8, 0))
     repository.set_cursor("upbit", "orders", "cursor-2", datetime(2026, 6, 6, 9, 0))
 
     assert repository.get_cursor("upbit", "orders") == "cursor-2"
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT updated_at FROM collection_cursors WHERE provider = 'upbit' AND stream = 'orders'"
+        ).fetchone() == ("2026-06-06T09:00:00+00:00",)
 
 
 def test_ledger_config_defaults_and_top_level_parsing(tmp_path) -> None:
