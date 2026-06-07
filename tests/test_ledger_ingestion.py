@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from portfolio_watchdog.ledger.ingestion import (
-    LedgerEventPage,
+    ProviderPage,
     add_manual_cash_flow,
     ingest_provider_events,
 )
@@ -94,6 +94,45 @@ def test_add_manual_cash_flow_is_idempotent(tmp_path) -> None:
     assert len(repository.list_events()) == 1
 
 
+def test_add_manual_cash_flow_rejects_idempotency_conflict_and_preserves_original(
+    tmp_path,
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    original = (
+        repository,
+        datetime(2026, 6, 7, 1, 0),
+        1_000,
+        "transfer",
+        "manual-1",
+    )
+    add_manual_cash_flow(*original)
+
+    with pytest.raises(ValueError, match="manual cash flow idempotency conflict"):
+        add_manual_cash_flow(
+            repository,
+            datetime(2026, 6, 7, 2, 0),
+            -1_000,
+            "different transfer",
+            "manual-1",
+        )
+
+    assert repository.list_events() == [
+        LedgerEvent(
+            provider="manual",
+            provider_event_id="manual-1",
+            occurred_at=datetime(2026, 6, 7, 1, 0, tzinfo=UTC),
+            event_type="deposit",
+            asset_symbol=None,
+            cash_flow_krw=1_000,
+            quantity=None,
+            unit_price_krw=None,
+            fee_krw=0,
+            external_cash_flow=True,
+            memo="transfer",
+        )
+    ]
+
+
 @pytest.mark.parametrize("amount", [0, float("nan"), float("inf"), float("-inf")])
 def test_add_manual_cash_flow_rejects_zero_or_non_finite_amount(tmp_path, amount) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
@@ -135,19 +174,24 @@ def test_ingest_provider_events_stores_two_pages_and_resumes_idempotently(tmp_pa
     def fetch_page(cursor):
         calls.append(cursor)
         if cursor is None:
-            return LedgerEventPage([_event("1")], "cursor-1", datetime(2026, 6, 7, 1))
-        if cursor == "cursor-1":
-            return LedgerEventPage([_event("2")], "cursor-2", datetime(2026, 6, 7, 2))
-        return LedgerEventPage([], None, datetime(2026, 6, 7, 3))
+            return ProviderPage(
+                [_event("1")], "page-2", "checkpoint-1", datetime(2026, 6, 7, 1)
+            )
+        if cursor == "page-2":
+            return ProviderPage(
+                [_event("2")], None, "checkpoint-2", datetime(2026, 6, 7, 2)
+            )
+        assert cursor == "checkpoint-2"
+        return ProviderPage([], None, "checkpoint-2", datetime(2026, 6, 7, 3))
 
     assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 2
-    assert calls == [None, "cursor-1", "cursor-2"]
-    assert repository.get_cursor("upbit", "orders") == "cursor-2"
+    assert calls == [None, "page-2"]
+    assert repository.get_cursor("upbit", "orders") == "checkpoint-2"
     assert [event.provider_event_id for event in repository.list_events()] == ["1", "2"]
 
     calls.clear()
     assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 0
-    assert calls == ["cursor-2"]
+    assert calls == ["checkpoint-2"]
     assert [event.provider_event_id for event in repository.list_events()] == ["1", "2"]
 
 
@@ -170,8 +214,11 @@ def test_ingest_provider_events_rolls_back_page_and_cursor_on_database_failure(
 
     def fetch_page(cursor):
         assert cursor == "before"
-        return LedgerEventPage(
-            [_event("good"), _event("bad")], "after", datetime(2026, 6, 7, 1)
+        return ProviderPage(
+            [_event("good"), _event("bad")],
+            None,
+            "after",
+            datetime(2026, 6, 7, 1),
         )
 
     with pytest.raises(sqlite3.IntegrityError, match="forced page failure"):
@@ -201,9 +248,9 @@ def test_ingest_provider_events_rejects_repeated_cursor(tmp_path) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
 
     def fetch_page(cursor):
-        return LedgerEventPage([], "same", datetime(2026, 6, 7, 1))
+        return ProviderPage([], "same", "checkpoint", datetime(2026, 6, 7, 1))
 
-    with pytest.raises(RuntimeError, match="repeated cursor"):
+    with pytest.raises(RuntimeError, match="repeated next_page_cursor"):
         ingest_provider_events(repository, "upbit", "orders", fetch_page)
 
 
@@ -214,7 +261,9 @@ def test_ingest_provider_events_rejects_excessive_pages(tmp_path, monkeypatch) -
 
     def fetch_page(cursor):
         calls.append(cursor)
-        return LedgerEventPage([], f"cursor-{len(calls)}", datetime(2026, 6, 7, 1))
+        return ProviderPage(
+            [], f"cursor-{len(calls)}", f"checkpoint-{len(calls)}", datetime(2026, 6, 7, 1)
+        )
 
     with pytest.raises(RuntimeError, match="page limit"):
         ingest_provider_events(repository, "upbit", "orders", fetch_page)
@@ -228,7 +277,12 @@ def test_ingest_provider_events_rejects_provider_mismatch_without_storing_page(
     repository = LedgerRepository(tmp_path / "watchdog.db")
 
     def fetch_page(cursor):
-        return LedgerEventPage([_event("1", provider="kis")], "next", datetime(2026, 6, 7, 1))
+        return ProviderPage(
+            [_event("1", provider="kis")],
+            None,
+            "checkpoint",
+            datetime(2026, 6, 7, 1),
+        )
 
     with pytest.raises(ValueError, match="provider"):
         ingest_provider_events(repository, "upbit", "orders", fetch_page)
@@ -242,11 +296,22 @@ def test_ingest_provider_events_applies_stale_cursor_updated_at_policy(tmp_path)
     repository.set_cursor("upbit", "orders", "latest", datetime(2026, 6, 7, 2))
 
     def fetch_page(cursor):
-        if cursor == "latest":
-            return LedgerEventPage([_event("1")], "delayed", datetime(2026, 6, 7, 1))
-        assert cursor == "delayed"
-        return LedgerEventPage([], None, datetime(2026, 6, 7, 1))
+        assert cursor == "latest"
+        return ProviderPage([_event("1")], None, "delayed", datetime(2026, 6, 7, 1))
 
-    assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 1
+    assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 0
     assert repository.get_cursor("upbit", "orders") == "latest"
-    assert [event.provider_event_id for event in repository.list_events()] == ["1"]
+    assert repository.list_events() == []
+
+
+@pytest.mark.parametrize("checkpoint_cursor", ["", "   ", None])
+def test_ingest_provider_events_rejects_empty_checkpoint_cursor(
+    tmp_path, checkpoint_cursor
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+
+    def fetch_page(cursor):
+        return ProviderPage([], None, checkpoint_cursor, datetime(2026, 6, 7, 1))
+
+    with pytest.raises(ValueError, match="checkpoint_cursor"):
+        ingest_provider_events(repository, "upbit", "orders", fetch_page)

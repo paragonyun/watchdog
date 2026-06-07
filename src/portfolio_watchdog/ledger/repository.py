@@ -27,19 +27,45 @@ class LedgerRepository:
         with self._connect() as connection:
             return _upsert_event(connection, event)
 
+    def insert_manual_event(self, event: LedgerEvent) -> bool:
+        values = _event_values(event)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT provider, provider_event_id, occurred_at, event_type, asset_symbol,
+                    cash_flow_krw, quantity, unit_price_krw, fee_krw,
+                    external_cash_flow, memo
+                FROM ledger_events
+                WHERE provider = ? AND provider_event_id = ?
+                """,
+                values[:2],
+            ).fetchone()
+            if existing is not None:
+                if tuple(existing) == values:
+                    return False
+                raise ValueError("manual cash flow idempotency conflict")
+            _insert_event(connection, values)
+        return True
+
     def upsert_event_page(
         self,
         events: Sequence[LedgerEvent],
         provider: str,
         stream: str,
-        cursor_value: Optional[str],
-        updated_at: datetime,
+        checkpoint_cursor: str,
+        checkpoint_updated_at: datetime,
     ) -> int:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if _cursor_is_stale(
+                connection, provider, stream, checkpoint_updated_at
+            ):
+                return 0
             inserted_count = sum(_upsert_event(connection, event) for event in events)
-            if cursor_value is not None:
-                _set_cursor(connection, provider, stream, cursor_value, updated_at)
+            _set_cursor(
+                connection, provider, stream, checkpoint_cursor, checkpoint_updated_at
+            )
         return inserted_count
 
     def list_events(
@@ -309,7 +335,25 @@ def _utc_iso(value: datetime) -> str:
 
 
 def _upsert_event(connection: sqlite3.Connection, event: LedgerEvent) -> bool:
-    values = (
+    values = _event_values(event)
+    inserted = _insert_event(connection, values)
+    if not inserted:
+        # Without a provider revision, the last upsert call is the correction source.
+        connection.execute(
+            """
+            UPDATE ledger_events SET
+                occurred_at = ?, event_type = ?, asset_symbol = ?,
+                cash_flow_krw = ?, quantity = ?, unit_price_krw = ?,
+                fee_krw = ?, external_cash_flow = ?, memo = ?
+            WHERE provider = ? AND provider_event_id = ?
+            """,
+            (*values[2:], values[0], values[1]),
+        )
+    return inserted
+
+
+def _event_values(event: LedgerEvent) -> tuple:
+    return (
         event.provider,
         event.provider_event_id,
         _utc_iso(event.occurred_at),
@@ -322,31 +366,40 @@ def _upsert_event(connection: sqlite3.Connection, event: LedgerEvent) -> bool:
         int(event.external_cash_flow),
         event.memo,
     )
-    inserted = connection.execute(
-        """
-        INSERT INTO ledger_events (
-            provider, provider_event_id, occurred_at, event_type, asset_symbol,
-            cash_flow_krw, quantity, unit_price_krw, fee_krw,
-            external_cash_flow, memo
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider, provider_event_id) DO NOTHING
-        RETURNING 1
-        """,
-        values,
-    ).fetchone()
-    if inserted is None:
-        # Without a provider revision, the last upsert call is the correction source.
+
+
+def _insert_event(connection: sqlite3.Connection, values: tuple) -> bool:
+    return (
         connection.execute(
             """
-            UPDATE ledger_events SET
-                occurred_at = ?, event_type = ?, asset_symbol = ?,
-                cash_flow_krw = ?, quantity = ?, unit_price_krw = ?,
-                fee_krw = ?, external_cash_flow = ?, memo = ?
-            WHERE provider = ? AND provider_event_id = ?
+            INSERT INTO ledger_events (
+                provider, provider_event_id, occurred_at, event_type, asset_symbol,
+                cash_flow_krw, quantity, unit_price_krw, fee_krw,
+                external_cash_flow, memo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider, provider_event_id) DO NOTHING
+            RETURNING 1
             """,
-            (*values[2:], values[0], values[1]),
-        )
-    return inserted is not None
+            values,
+        ).fetchone()
+        is not None
+    )
+
+
+def _cursor_is_stale(
+    connection: sqlite3.Connection,
+    provider: str,
+    stream: str,
+    updated_at: datetime,
+) -> bool:
+    existing = connection.execute(
+        "SELECT updated_at FROM collection_cursors WHERE provider = ? AND stream = ?",
+        (provider, stream),
+    ).fetchone()
+    return (
+        existing is not None
+        and _from_utc_iso(_utc_iso(updated_at)) < _from_utc_iso(existing["updated_at"])
+    )
 
 
 def _set_cursor(

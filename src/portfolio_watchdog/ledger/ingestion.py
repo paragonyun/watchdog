@@ -11,10 +11,11 @@ MAX_PAGES = 1000
 
 
 @dataclass(frozen=True)
-class LedgerEventPage:
+class ProviderPage:
     events: list[LedgerEvent]
-    next_cursor: str | None
-    cursor_updated_at: datetime
+    next_page_cursor: str | None
+    checkpoint_cursor: str
+    checkpoint_updated_at: datetime
 
 
 def add_manual_cash_flow(
@@ -27,7 +28,7 @@ def add_manual_cash_flow(
     amount = _non_zero_finite_number(amount_krw, "amount_krw")
     _non_empty_string(idempotency_key, "idempotency_key")
     _non_empty_string(memo, "memo")
-    return repository.upsert_event(
+    return repository.insert_manual_event(
         LedgerEvent(
             provider="manual",
             provider_event_id=idempotency_key,
@@ -48,36 +49,38 @@ def ingest_provider_events(
     repository: LedgerRepository,
     provider: str,
     stream: str,
-    fetch_page: Callable[[str | None], LedgerEventPage],
+    fetch_page: Callable[[str | None], ProviderPage],
 ) -> int:
     _non_empty_string(provider, "provider")
     _non_empty_string(stream, "stream")
-    cursor = repository.get_cursor(provider, stream)
-    seen_cursors = {cursor} if cursor is not None else set()
+    checkpoint_cursor = repository.get_cursor(provider, stream)
+    page_cursor = checkpoint_cursor
+    seen_page_cursors = {page_cursor} if page_cursor is not None else set()
     inserted_count = 0
 
     for _ in range(MAX_PAGES):
-        page = fetch_page(cursor)
-        if not isinstance(page, LedgerEventPage):
-            raise TypeError("fetch_page must return LedgerEventPage")
+        page = fetch_page(page_cursor)
+        if not isinstance(page, ProviderPage):
+            raise TypeError("fetch_page must return ProviderPage")
         if any(event.provider != provider for event in page.events):
             raise ValueError("event.provider must match provider")
-        if page.next_cursor is not None:
-            _non_empty_string(page.next_cursor, "next_cursor")
-            if page.next_cursor in seen_cursors:
-                raise RuntimeError("repeated cursor")
+        _non_empty_string(page.checkpoint_cursor, "checkpoint_cursor")
+        if page.next_page_cursor is not None:
+            _non_empty_string(page.next_page_cursor, "next_page_cursor")
+            if page.next_page_cursor in seen_page_cursors:
+                raise RuntimeError("repeated next_page_cursor")
 
         inserted_count += repository.upsert_event_page(
             page.events,
             provider,
             stream,
-            page.next_cursor,
-            page.cursor_updated_at,
+            page.checkpoint_cursor,
+            page.checkpoint_updated_at,
         )
-        if page.next_cursor is None:
+        if page.next_page_cursor is None:
             return inserted_count
-        cursor = page.next_cursor
-        seen_cursors.add(cursor)
+        page_cursor = page.next_page_cursor
+        seen_page_cursors.add(page_cursor)
 
     raise RuntimeError(f"page limit exceeded: {MAX_PAGES}")
 

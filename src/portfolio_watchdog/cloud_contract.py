@@ -17,6 +17,7 @@ FORBIDDEN_CLOUD_FIELDS = {
     "app_secret",
     "raw_response",
     "raw_api_response",
+    "memo",
 }
 
 
