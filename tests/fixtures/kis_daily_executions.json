@@ -8,9 +8,7 @@
     "ord_tmd": "091530",
     "tot_ccld_qty": "2",
     "avg_prvs": "70000",
-    "tot_ccld_amt": "140000",
-    "fee": "100",
-    "tax": "20"
+    "tot_ccld_amt": "140000"
   },
   {
     "ord_dt": "20260502",
@@ -18,10 +16,10 @@
     "odno": "0000001002",
     "sll_buy_dvsn_cd": "01",
     "pdno": "005930",
+    "ord_tmd": "101500",
     "tot_ccld_qty": "1",
     "avg_prvs": "71000",
-    "tot_ccld_amt": "71000",
-    "prsm_tlex_smtl": "150"
+    "tot_ccld_amt": "71000"
   },
   {
     "ord_dt": "20260503",
@@ -29,6 +27,7 @@
     "odno": "0000001003",
     "sll_buy_dvsn_cd": "02",
     "pdno": "005930",
+    "ord_tmd": "110000",
     "tot_ccld_qty": "0",
     "avg_prvs": "0",
     "tot_ccld_amt": "0"
@@ -39,8 +38,20 @@
     "odno": "0000001004",
     "sll_buy_dvsn_cd": "02",
     "pdno": "005930",
+    "ord_tmd": "130000",
     "tot_ccld_qty": "1",
     "avg_prvs": "50000",
     "tot_ccld_amt": "50000"
+  },
+  {
+    "ord_dt": "20260501",
+    "ord_gno_brno": "00123",
+    "odno": "0000001001",
+    "sll_buy_dvsn_cd": "02",
+    "pdno": "005930",
+    "ord_tmd": "090000",
+    "tot_ccld_qty": "1",
+    "avg_prvs": "69000",
+    "tot_ccld_amt": "69000"
   }
 ]

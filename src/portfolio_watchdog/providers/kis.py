@@ -35,41 +35,37 @@ def _kis_number(row: Dict, field: str) -> Decimal:
 
 def _kis_occurred_at(row: Dict) -> datetime:
     ord_dt = _kis_required_text(row, "ord_dt")
-    time_value = next(
-        (row[field] for field in ("ccld_tmd", "ccld_time", "ord_tmd") if row.get(field)),
-        "000000",
-    )
+    # KIS output1 has no execution timestamp; ord_tmd is an order-time approximation.
+    ord_tmd = _kis_required_text(row, "ord_tmd")
     try:
-        local = datetime.strptime(f"{ord_dt}{time_value}", "%Y%m%d%H%M%S").replace(tzinfo=KST)
+        local = datetime.strptime(f"{ord_dt}{ord_tmd}", "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except (TypeError, ValueError) as exc:
-        raise ValueError("KIS ord_dt and execution time must use YYYYMMDD and HHMMSS") from exc
+        raise ValueError("KIS ord_dt and ord_tmd must use YYYYMMDD and HHMMSS") from exc
     return local.astimezone(timezone.utc)
-
-
-def _kis_fee(row: Dict) -> Decimal:
-    fee = Decimal("0")
-    for field, raw_value in row.items():
-        normalized = field.lower()
-        if not any(token in normalized for token in ("fee", "tax", "cmsn", "tlex")):
-            continue
-        if raw_value in ("", None):
-            continue
-        fee += _kis_number(row, field)
-    return fee
 
 
 def parse_kis_daily_executions(
     rows: list[dict], broker_symbol_to_symbol: Dict[str, str]
 ) -> list[LedgerEvent]:
     events: list[LedgerEvent] = []
+    seen_event_ids = set()
     for row in rows:
+        event_id = ":".join(
+            (
+                _kis_required_text(row, "ord_dt"),
+                _kis_required_text(row, "ord_gno_brno"),
+                _kis_required_text(row, "odno"),
+            )
+        )
+        if event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id)
+
         quantity = _kis_number(row, "tot_ccld_qty")
         if quantity == 0:
             continue
         unit_price = _kis_number(row, "avg_prvs")
         amount = _kis_number(row, "tot_ccld_amt")
-        if quantity * unit_price != amount:
-            raise ValueError("KIS tot_ccld_amt must equal tot_ccld_qty * avg_prvs")
 
         broker_symbol = _kis_required_text(row, "pdno")
         try:
@@ -80,25 +76,18 @@ def parse_kis_daily_executions(
         if side not in {"01", "02"}:
             raise ValueError("KIS sll_buy_dvsn_cd must be 01 or 02")
 
-        fee = _kis_fee(row)
         is_buy = side == "02"
         events.append(
             LedgerEvent(
                 provider="kis",
-                provider_event_id=":".join(
-                    (
-                        _kis_required_text(row, "ord_dt"),
-                        _kis_required_text(row, "ord_gno_brno"),
-                        _kis_required_text(row, "odno"),
-                    )
-                ),
+                provider_event_id=event_id,
                 occurred_at=_kis_occurred_at(row),
                 event_type="buy" if is_buy else "sell",
                 asset_symbol=asset_symbol,
-                cash_flow_krw=float(-(amount + fee) if is_buy else amount - fee),
+                cash_flow_krw=float(-amount if is_buy else amount),
                 quantity=float(quantity if is_buy else -quantity),
                 unit_price_krw=float(unit_price),
-                fee_krw=float(fee),
+                fee_krw=0.0,
             )
         )
     return events
@@ -193,8 +182,9 @@ class KisDomesticStockClient:
             raise ValueError("start_date and end_date must use YYYYMMDD") from exc
         if start > end:
             raise ValueError("start_date must not be after end_date")
-        if end - start > timedelta(days=90):
-            raise ValueError("date range must not exceed 90 days")
+        today = datetime.now(KST).date()
+        if start.date() < today - timedelta(days=90) or end.date() > today:
+            raise ValueError("dates must be within the most recent 90 days")
 
         token = self.token_client.get_access_token()
         headers = {
@@ -219,7 +209,7 @@ class KisDomesticStockClient:
             "INQR_DVSN_1": "",
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
-            "EXCG_ID_DVSN_CD": "KRX",
+            "EXCG_ID_DVSN_CD": "ALL",
         }
         rows: List[Dict] = []
         seen_cursors = {("", "")}

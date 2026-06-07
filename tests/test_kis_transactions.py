@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -16,7 +16,12 @@ def _fixture() -> list[dict]:
     return json.loads((FIXTURES / "kis_daily_executions.json").read_text(encoding="utf-8"))
 
 
-def test_parse_kis_daily_executions_maps_direction_time_and_fees() -> None:
+def _recent_dates() -> tuple[str, str]:
+    today = datetime.now(kis.KST).date()
+    return (today - timedelta(days=30)).strftime("%Y%m%d"), today.strftime("%Y%m%d")
+
+
+def test_parse_kis_daily_executions_maps_direction_and_uses_order_time_as_approximation() -> None:
     events = parse_kis_daily_executions(_fixture(), {"005930": "SAMSUNG"})
 
     assert [event.provider_event_id for event in events] == [
@@ -32,21 +37,40 @@ def test_parse_kis_daily_executions_maps_direction_time_and_fees() -> None:
         (1.0, 50000.0),
     ]
     assert [(event.fee_krw, event.cash_flow_krw) for event in events] == [
-        (120.0, -140120.0),
-        (150.0, 70850.0),
+        (0.0, -140000.0),
+        (0.0, 71000.0),
         (0.0, -50000.0),
     ]
     assert events[0].occurred_at == datetime(2026, 5, 1, 0, 15, 30, tzinfo=timezone.utc)
-    assert events[1].occurred_at == datetime(2026, 5, 1, 15, 0, tzinfo=timezone.utc)
-    assert events[2].occurred_at == datetime(2026, 5, 3, 15, 0, tzinfo=timezone.utc)
+    assert events[1].occurred_at == datetime(2026, 5, 2, 1, 15, tzinfo=timezone.utc)
+    assert events[2].occurred_at == datetime(2026, 5, 4, 4, 0, tzinfo=timezone.utc)
 
 
-def test_parse_kis_daily_executions_prefers_execution_time() -> None:
-    row = {**_fixture()[0], "ord_tmd": "090000", "ccld_tmd": "101500"}
+def test_parse_kis_daily_executions_rejects_missing_order_time() -> None:
+    row = {
+        **{key: value for key, value in _fixture()[0].items() if key != "ord_tmd"},
+        "ccld_tmd": "101500",
+    }
+
+    with pytest.raises(ValueError, match="ord_tmd"):
+        parse_kis_daily_executions([row], {"005930": "SAMSUNG"})
+
+
+def test_parse_kis_daily_executions_dedupes_reverse_order_using_first_latest_row() -> None:
+    events = parse_kis_daily_executions([_fixture()[0], _fixture()[-1]], {"005930": "SAMSUNG"})
+
+    assert len(events) == 1
+    assert events[0].quantity == 2.0
+    assert events[0].cash_flow_krw == -140000.0
+
+
+def test_parse_kis_daily_executions_ignores_unofficial_fee_fields() -> None:
+    row = {**_fixture()[0], "fee": "100", "tax": "20"}
 
     event = parse_kis_daily_executions([row], {"005930": "SAMSUNG"})[0]
 
-    assert event.occurred_at == datetime(2026, 5, 1, 1, 15, tzinfo=timezone.utc)
+    assert event.fee_krw == 0
+    assert event.cash_flow_krw == -140000
 
 
 def test_parse_kis_daily_executions_rejects_unmapped_symbol() -> None:
@@ -59,7 +83,7 @@ def test_parse_kis_daily_executions_rejects_unmapped_symbol() -> None:
     [
         ("tot_ccld_qty", "bad"),
         ("avg_prvs", "-1"),
-        ("tot_ccld_amt", "139999"),
+        ("tot_ccld_amt", "bad"),
     ],
 )
 def test_parse_kis_daily_executions_validates_execution_totals(field, value) -> None:
@@ -67,6 +91,14 @@ def test_parse_kis_daily_executions_validates_execution_totals(field, value) -> 
 
     with pytest.raises(ValueError, match=field):
         parse_kis_daily_executions([row], {"005930": "SAMSUNG"})
+
+
+def test_parse_kis_daily_executions_allows_rounded_total_amount() -> None:
+    row = {**_fixture()[0], "tot_ccld_amt": "139999"}
+
+    event = parse_kis_daily_executions([row], {"005930": "SAMSUNG"})[0]
+
+    assert event.cash_flow_krw == -139999
 
 
 class Response:
@@ -96,6 +128,7 @@ class TokenClient:
 
 
 def test_kis_daily_executions_uses_official_request_and_continuation(monkeypatch) -> None:
+    start_date, end_date = _recent_dates()
     calls = []
     responses = iter(
         [
@@ -108,7 +141,7 @@ def test_kis_daily_executions_uses_official_request_and_continuation(monkeypatch
     )
     monkeypatch.setattr(kis.requests, "get", lambda url, **kwargs: calls.append((url, kwargs)) or next(responses))
 
-    rows = KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions("20260501", "20260531")
+    rows = KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions(start_date, end_date)
 
     assert rows == [{"odno": "1"}, {"odno": "2"}]
     assert [call[0] for call in calls] == [
@@ -121,8 +154,8 @@ def test_kis_daily_executions_uses_official_request_and_continuation(monkeypatch
     assert calls[0][1]["params"] == {
         "CANO": "12345678",
         "ACNT_PRDT_CD": "01",
-        "INQR_STRT_DT": "20260501",
-        "INQR_END_DT": "20260531",
+        "INQR_STRT_DT": start_date,
+        "INQR_END_DT": end_date,
         "SLL_BUY_DVSN_CD": "00",
         "PDNO": "",
         "CCLD_DVSN": "00",
@@ -133,7 +166,7 @@ def test_kis_daily_executions_uses_official_request_and_continuation(monkeypatch
         "INQR_DVSN_1": "",
         "CTX_AREA_FK100": "",
         "CTX_AREA_NK100": "",
-        "EXCG_ID_DVSN_CD": "KRX",
+        "EXCG_ID_DVSN_CD": "ALL",
     }
     assert calls[1][1]["params"]["CTX_AREA_FK100"] == "FK"
     assert calls[1][1]["params"]["CTX_AREA_NK100"] == "NK"
@@ -141,37 +174,59 @@ def test_kis_daily_executions_uses_official_request_and_continuation(monkeypatch
 
 
 def test_kis_daily_executions_uses_virtual_tr_id(monkeypatch) -> None:
+    today = datetime.now(kis.KST).strftime("%Y%m%d")
     calls = []
     monkeypatch.setattr(kis.requests, "get", lambda url, **kwargs: calls.append(kwargs) or Response({"output1": []}))
 
-    KisDomesticStockClient(TokenClient("virtual"), "12345678", "01").get_daily_executions("20260501", "20260501")
+    KisDomesticStockClient(TokenClient("virtual"), "12345678", "01").get_daily_executions(today, today)
 
     assert calls[0]["headers"]["tr_id"] == "VTTC0081R"
 
 
 @pytest.mark.parametrize(
-    ("start_date", "end_date"),
-    [
-        ("20260502", "20260501"),
-        ("20260101", "20260402"),
-        ("2026-05-01", "20260502"),
-        ("2026051", "20260502"),
-    ],
+    ("start_offset", "end_offset"),
+    [(0, -1), (-91, 0), (0, 1)],
 )
-def test_kis_daily_executions_rejects_invalid_or_overlong_date_ranges_without_request(
-    monkeypatch, start_date, end_date
+def test_kis_daily_executions_rejects_dates_outside_recent_90_days_without_request(
+    monkeypatch, start_offset, end_offset
 ) -> None:
+    today = datetime.now(kis.KST).date()
+    start_date = (today + timedelta(days=start_offset)).strftime("%Y%m%d")
+    end_date = (today + timedelta(days=end_offset)).strftime("%Y%m%d")
     monkeypatch.setattr(kis.requests, "get", lambda *args, **kwargs: pytest.fail("network called"))
 
     with pytest.raises(ValueError, match="date"):
         KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions(start_date, end_date)
 
 
+def test_kis_daily_executions_allows_start_exactly_90_days_ago(monkeypatch) -> None:
+    today = datetime.now(kis.KST).date()
+    calls = []
+    monkeypatch.setattr(kis.requests, "get", lambda *args, **kwargs: calls.append(kwargs) or Response({"output1": []}))
+
+    KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions(
+        (today - timedelta(days=90)).strftime("%Y%m%d"), today.strftime("%Y%m%d")
+    )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("start_date", ["2026-05-01", "2026051"])
+def test_kis_daily_executions_rejects_invalid_date_format_without_request(monkeypatch, start_date) -> None:
+    monkeypatch.setattr(kis.requests, "get", lambda *args, **kwargs: pytest.fail("network called"))
+
+    with pytest.raises(ValueError, match="date"):
+        KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions(
+            start_date, datetime.now(kis.KST).strftime("%Y%m%d")
+        )
+
+
 def test_kis_daily_executions_validates_output_and_repeated_cursor(monkeypatch) -> None:
+    today = datetime.now(kis.KST).strftime("%Y%m%d")
     monkeypatch.setattr(kis.requests, "get", lambda *args, **kwargs: Response({"output1": {}}))
     client = KisDomesticStockClient(TokenClient(), "12345678", "01")
     with pytest.raises(ValueError, match="output1"):
-        client.get_daily_executions("20260501", "20260501")
+        client.get_daily_executions(today, today)
 
     monkeypatch.setattr(
         kis.requests,
@@ -182,14 +237,15 @@ def test_kis_daily_executions_validates_output_and_repeated_cursor(monkeypatch) 
         ),
     )
     with pytest.raises(RuntimeError, match="cursor"):
-        client.get_daily_executions("20260501", "20260501")
+        client.get_daily_executions(today, today)
 
 
 def test_kis_daily_executions_propagates_request_errors(monkeypatch) -> None:
+    today = datetime.now(kis.KST).strftime("%Y%m%d")
     error = requests.Timeout("private response detail")
     monkeypatch.setattr(kis.requests, "get", lambda *args, **kwargs: Response({}, error=error))
 
     with pytest.raises(requests.Timeout) as raised:
-        KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions("20260501", "20260501")
+        KisDomesticStockClient(TokenClient(), "12345678", "01").get_daily_executions(today, today)
 
     assert raised.value is error
