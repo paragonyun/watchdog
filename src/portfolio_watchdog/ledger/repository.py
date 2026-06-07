@@ -24,45 +24,23 @@ class LedgerRepository:
             self._initialize_schema()
 
     def upsert_event(self, event: LedgerEvent) -> bool:
-        values = (
-            event.provider,
-            event.provider_event_id,
-            _utc_iso(event.occurred_at),
-            event.event_type,
-            event.asset_symbol,
-            event.cash_flow_krw,
-            event.quantity,
-            event.unit_price_krw,
-            event.fee_krw,
-            int(event.external_cash_flow),
-            event.memo,
-        )
         with self._connect() as connection:
-            inserted = connection.execute(
-                """
-                INSERT INTO ledger_events (
-                    provider, provider_event_id, occurred_at, event_type, asset_symbol,
-                    cash_flow_krw, quantity, unit_price_krw, fee_krw,
-                    external_cash_flow, memo
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(provider, provider_event_id) DO NOTHING
-                RETURNING 1
-                """,
-                values,
-            ).fetchone()
-            if inserted is None:
-                # Without a provider revision, the last upsert call is the correction source.
-                connection.execute(
-                    """
-                    UPDATE ledger_events SET
-                        occurred_at = ?, event_type = ?, asset_symbol = ?,
-                        cash_flow_krw = ?, quantity = ?, unit_price_krw = ?,
-                        fee_krw = ?, external_cash_flow = ?, memo = ?
-                    WHERE provider = ? AND provider_event_id = ?
-                    """,
-                    (*values[2:], values[0], values[1]),
-                )
-        return inserted is not None
+            return _upsert_event(connection, event)
+
+    def upsert_event_page(
+        self,
+        events: Sequence[LedgerEvent],
+        provider: str,
+        stream: str,
+        cursor_value: Optional[str],
+        updated_at: datetime,
+    ) -> int:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            inserted_count = sum(_upsert_event(connection, event) for event in events)
+            if cursor_value is not None:
+                _set_cursor(connection, provider, stream, cursor_value, updated_at)
+        return inserted_count
 
     def list_events(
         self, since: Optional[datetime] = None, until: Optional[datetime] = None
@@ -281,31 +259,7 @@ class LedgerRepository:
     ) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                "SELECT cursor_value, updated_at FROM collection_cursors "
-                "WHERE provider = ? AND stream = ?",
-                (provider, stream),
-            ).fetchone()
-            normalized_updated_at = _utc_iso(updated_at)
-            if existing is not None:
-                existing_updated_at = _from_utc_iso(existing["updated_at"])
-                new_updated_at = _from_utc_iso(normalized_updated_at)
-                if new_updated_at < existing_updated_at:
-                    return
-                if new_updated_at == existing_updated_at and _cursor_moves_backward(
-                    existing["cursor_value"], cursor_value
-                ):
-                    return
-            connection.execute(
-                """
-                INSERT INTO collection_cursors(provider, stream, cursor_value, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(provider, stream) DO UPDATE SET
-                    cursor_value = excluded.cursor_value,
-                    updated_at = excluded.updated_at
-                """,
-                (provider, stream, cursor_value, normalized_updated_at),
-            )
+            _set_cursor(connection, provider, stream, cursor_value, updated_at)
 
     def _initialize_schema(self) -> None:
         for attempt in range(BUSY_RETRY_ATTEMPTS):
@@ -352,6 +306,81 @@ def _utc_iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _upsert_event(connection: sqlite3.Connection, event: LedgerEvent) -> bool:
+    values = (
+        event.provider,
+        event.provider_event_id,
+        _utc_iso(event.occurred_at),
+        event.event_type,
+        event.asset_symbol,
+        event.cash_flow_krw,
+        event.quantity,
+        event.unit_price_krw,
+        event.fee_krw,
+        int(event.external_cash_flow),
+        event.memo,
+    )
+    inserted = connection.execute(
+        """
+        INSERT INTO ledger_events (
+            provider, provider_event_id, occurred_at, event_type, asset_symbol,
+            cash_flow_krw, quantity, unit_price_krw, fee_krw,
+            external_cash_flow, memo
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, provider_event_id) DO NOTHING
+        RETURNING 1
+        """,
+        values,
+    ).fetchone()
+    if inserted is None:
+        # Without a provider revision, the last upsert call is the correction source.
+        connection.execute(
+            """
+            UPDATE ledger_events SET
+                occurred_at = ?, event_type = ?, asset_symbol = ?,
+                cash_flow_krw = ?, quantity = ?, unit_price_krw = ?,
+                fee_krw = ?, external_cash_flow = ?, memo = ?
+            WHERE provider = ? AND provider_event_id = ?
+            """,
+            (*values[2:], values[0], values[1]),
+        )
+    return inserted is not None
+
+
+def _set_cursor(
+    connection: sqlite3.Connection,
+    provider: str,
+    stream: str,
+    cursor_value: str,
+    updated_at: datetime,
+) -> None:
+    existing = connection.execute(
+        "SELECT cursor_value, updated_at FROM collection_cursors "
+        "WHERE provider = ? AND stream = ?",
+        (provider, stream),
+    ).fetchone()
+    normalized_updated_at = _utc_iso(updated_at)
+    if existing is not None:
+        existing_updated_at = _from_utc_iso(existing["updated_at"])
+        new_updated_at = _from_utc_iso(normalized_updated_at)
+        if new_updated_at < existing_updated_at:
+            return
+        if new_updated_at == existing_updated_at and _cursor_moves_backward(
+            existing["cursor_value"], cursor_value
+        ):
+            return
+    connection.execute(
+        """
+        INSERT INTO collection_cursors(provider, stream, cursor_value, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(provider, stream) DO UPDATE SET
+            cursor_value = excluded.cursor_value,
+            updated_at = excluded.updated_at
+        """,
+        (provider, stream, cursor_value, normalized_updated_at),
+    )
 
 
 def _from_utc_iso(value: str) -> datetime:
