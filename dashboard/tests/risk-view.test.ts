@@ -39,7 +39,7 @@ test("flags fallback and insufficient performance history without inventing draw
   const risk = buildRiskView({
     ...baseView,
     status: "fallback",
-    performance: { ...baseView.performance, maxDrawdownPct: null, status: "insufficient_data" },
+    performance: { ...baseView.performance, maxDrawdownPct: 0, status: "insufficient_data" },
     providers: [{ provider: "upbit", status: "fallback", usedFallback: true }],
   });
 

@@ -106,7 +106,7 @@ export function buildRiskView(view: DashboardView): RiskView {
     topThreeWeightPercent,
     lossExposureWeightPercent,
     maxGroupDeviationPercentagePoints,
-    maxDrawdownPct: view.performance.maxDrawdownPct,
+    maxDrawdownPct: view.performance.status === "insufficient_data" ? null : view.performance.maxDrawdownPct,
     concentrationAssets: concentrationAssets.slice(0, 5),
     lossAssets,
     groupDeviations: [...view.groups].sort(
