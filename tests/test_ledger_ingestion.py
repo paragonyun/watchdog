@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -302,6 +303,59 @@ def test_ingest_provider_events_applies_stale_cursor_updated_at_policy(tmp_path)
     assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 0
     assert repository.get_cursor("upbit", "orders") == "latest"
     assert repository.list_events() == []
+
+
+@pytest.mark.parametrize(
+    ("current_checkpoint", "backward_checkpoint"),
+    [
+        ("10", "9"),
+        ("2026-06-07T02:00:00+00:00", "2026-06-07T01:00:00+00:00"),
+    ],
+)
+def test_ingest_provider_events_ignores_same_updated_at_backward_checkpoint_page(
+    tmp_path, current_checkpoint, backward_checkpoint
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    updated_at = datetime(2026, 6, 7, 3)
+    original = _event("1")
+    repository.upsert_event(original)
+    repository.set_cursor("upbit", "orders", current_checkpoint, updated_at)
+
+    def fetch_page(cursor):
+        assert cursor == current_checkpoint
+        return ProviderPage(
+            [replace(original, cash_flow_krw=-200_000)],
+            None,
+            backward_checkpoint,
+            updated_at,
+        )
+
+    assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 0
+    assert repository.get_cursor("upbit", "orders") == current_checkpoint
+    assert repository.list_events()[0].cash_flow_krw == -100_000
+
+
+def test_ingest_provider_events_accepts_same_updated_at_opaque_checkpoint_page(
+    tmp_path,
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    updated_at = datetime(2026, 6, 7, 3)
+    original = _event("1")
+    repository.upsert_event(original)
+    repository.set_cursor("upbit", "orders", "opaque-z", updated_at)
+
+    def fetch_page(cursor):
+        assert cursor == "opaque-z"
+        return ProviderPage(
+            [replace(original, cash_flow_krw=-200_000)],
+            None,
+            "opaque-a",
+            updated_at,
+        )
+
+    assert ingest_provider_events(repository, "upbit", "orders", fetch_page) == 0
+    assert repository.get_cursor("upbit", "orders") == "opaque-a"
+    assert repository.list_events()[0].cash_flow_krw == -200_000
 
 
 @pytest.mark.parametrize("checkpoint_cursor", ["", "   ", None])

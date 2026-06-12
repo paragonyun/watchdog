@@ -58,8 +58,12 @@ class LedgerRepository:
     ) -> int:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            if _cursor_is_stale(
-                connection, provider, stream, checkpoint_updated_at
+            if not _cursor_would_be_accepted(
+                connection,
+                provider,
+                stream,
+                checkpoint_cursor,
+                checkpoint_updated_at,
             ):
                 return 0
             inserted_count = sum(_upsert_event(connection, event) for event in events)
@@ -386,19 +390,26 @@ def _insert_event(connection: sqlite3.Connection, values: tuple) -> bool:
     )
 
 
-def _cursor_is_stale(
+def _cursor_would_be_accepted(
     connection: sqlite3.Connection,
     provider: str,
     stream: str,
+    cursor_value: str,
     updated_at: datetime,
 ) -> bool:
     existing = connection.execute(
-        "SELECT updated_at FROM collection_cursors WHERE provider = ? AND stream = ?",
+        "SELECT cursor_value, updated_at FROM collection_cursors "
+        "WHERE provider = ? AND stream = ?",
         (provider, stream),
     ).fetchone()
-    return (
-        existing is not None
-        and _from_utc_iso(_utc_iso(updated_at)) < _from_utc_iso(existing["updated_at"])
+    if existing is None:
+        return True
+    existing_updated_at = _from_utc_iso(existing["updated_at"])
+    new_updated_at = _from_utc_iso(_utc_iso(updated_at))
+    if new_updated_at < existing_updated_at:
+        return False
+    return new_updated_at != existing_updated_at or not _cursor_moves_backward(
+        existing["cursor_value"], cursor_value
     )
 
 
@@ -409,21 +420,10 @@ def _set_cursor(
     cursor_value: str,
     updated_at: datetime,
 ) -> None:
-    existing = connection.execute(
-        "SELECT cursor_value, updated_at FROM collection_cursors "
-        "WHERE provider = ? AND stream = ?",
-        (provider, stream),
-    ).fetchone()
-    normalized_updated_at = _utc_iso(updated_at)
-    if existing is not None:
-        existing_updated_at = _from_utc_iso(existing["updated_at"])
-        new_updated_at = _from_utc_iso(normalized_updated_at)
-        if new_updated_at < existing_updated_at:
-            return
-        if new_updated_at == existing_updated_at and _cursor_moves_backward(
-            existing["cursor_value"], cursor_value
-        ):
-            return
+    if not _cursor_would_be_accepted(
+        connection, provider, stream, cursor_value, updated_at
+    ):
+        return
     connection.execute(
         """
         INSERT INTO collection_cursors(provider, stream, cursor_value, updated_at)
@@ -432,7 +432,7 @@ def _set_cursor(
             cursor_value = excluded.cursor_value,
             updated_at = excluded.updated_at
         """,
-        (provider, stream, cursor_value, normalized_updated_at),
+        (provider, stream, cursor_value, _utc_iso(updated_at)),
     )
 
 
