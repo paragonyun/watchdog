@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -31,6 +32,7 @@ def build_report_payload(
     period_days: Optional[int] = None,
     period_hours: Optional[int] = None,
     provider_status: Optional[List[Dict[str, Any]]] = None,
+    performance_summary: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     now = generated_at or datetime.now()
     since = _period_start(now, period_days, period_hours, report_kind)
@@ -63,6 +65,9 @@ def build_report_payload(
         "news_impacts": _news_impacts(merged_news[-30:], portfolio),
         "validation": {},
     }
+    if performance_summary is not None:
+        performance = performance_summary.get("performance", performance_summary)
+        payload["performance"] = _report_performance(performance)
     result = validate_report_payload(payload)
     payload["validation"] = {"valid": result.valid, "issues": result.issues}
     return payload
@@ -266,6 +271,37 @@ def _asset_snapshot(asset) -> Dict[str, Any]:
         "average_buy_price_krw": asset.average_buy_price_krw,
         "price_source": asset.price_quote.source if asset.price_quote else ("manual" if asset.manual_value_krw is not None else "unknown"),
     }
+
+
+def _report_performance(performance: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for field in (
+        "cumulative_twr_pct",
+        "month_twr_pct",
+        "benchmark_return_pct",
+        "excess_return_pct",
+        "max_drawdown_pct",
+    ):
+        if field not in performance:
+            continue
+        value = performance[field]
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"invalid report performance field: {field}")
+        result[field] = value
+    if "status" in performance:
+        status = performance["status"]
+        if not isinstance(status, str) or status not in {
+            "confirmed",
+            "provisional",
+            "insufficient_data",
+        }:
+            raise ValueError("invalid report performance status")
+        result["status"] = status
+    return result
 
 
 def _news_item_snapshot(item: NewsItem, captured_at: datetime) -> Dict[str, Any]:

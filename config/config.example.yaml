@@ -147,3 +147,8 @@ telegram:
 snapshot:
   path: snapshots/state.json
   history_path: snapshots/history.json
+
+ledger:
+  path: snapshots/watchdog.db
+  reconciliation_quantity_tolerance: 0.00000001
+  raw_response_retention_days: 30

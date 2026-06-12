@@ -16,6 +16,9 @@ python -m portfolio_watchdog render-report-pdf --path reports\weekly_report_fina
 python -m portfolio_watchdog send-report-document --path reports\weekly_report_final_YYYYMMDD_HHMM.pdf
 python -m portfolio_watchdog complete-report --path reports\portfolio_report_final_YYYYMMDD_HHMM.md --sync-dashboard
 python -m portfolio_watchdog sync-dashboard --path reports\portfolio_report_source_YYYYMMDD_HHMM.json
+python -m portfolio_watchdog sync-ledger
+python -m portfolio_watchdog add-cash-flow --amount 1000000 --occurred-at 2026-06-06T12:00:00 --memo "cash deposit"
+python -m portfolio_watchdog performance-summary
 python -m portfolio_watchdog send-message-file --path reports\hourly_news_codex_YYYYMMDD_HHMM.html
 python -m portfolio_watchdog send-sample-reports
 python -m portfolio_watchdog install-schedule
@@ -59,7 +62,15 @@ python -m portfolio_watchdog send-test-alert
 - Codex Automations에서 `Complete Watchdog weekly report`, `Complete Watchdog portfolio reports`, hourly news 자동화가 `ACTIVE`인지 확인
 - Windows 작업 스케줄러가 필요하면 `python -m portfolio_watchdog install-schedule` 재실행
 
-위클리 완성 리포트와 08/12/18 포트폴리오 리포트의 최종 Markdown 문안은 Codex 자동화가 작성합니다. 작성된 Markdown은 `complete-report` 명령으로 PDF 렌더링, 텔레그램 전송, 선택적 대시보드 동기화까지 한 번에 처리합니다. Windows 작업 스케줄러는 매시간 뉴스 체크만 담당합니다.
+위클리 완성 리포트와 08/12/18 포트폴리오 리포트의 최종 Markdown 문안은 Codex 자동화가 작성합니다. 작성된 Markdown은 `complete-report` 명령으로 PDF 렌더링, 텔레그램 전송, 선택적 대시보드 동기화까지 한 번에 처리합니다. Windows 작업 스케줄러는 매시간 뉴스 체크와 08:00, 12:00, 18:00, 22:00 원장 동기화를 담당합니다.
+
+## 로컬 투자 원장
+
+`sync-ledger`는 기존 JSON 평가 이력을 SQLite로 가져온 뒤 Upbit/KIS 조회 전용 API에서 거래 이력을 수집하고, 현재 평가 스냅샷·보유수량 대사·TWR 성과를 계산합니다. 결과 v2 payload는 기본적으로 `snapshots/dashboard_v2_latest.json`에만 저장되며 현재 Vercel v1 업로드 경로에는 전송하지 않습니다.
+
+기본 SQLite 위치는 `snapshots/watchdog.db`입니다. `.env`의 `WATCHDOG_LEDGER_PATH`를 설정하면 YAML의 `ledger.path`보다 우선합니다. 수량, 평단, 거래 메모 등 민감한 원장 정보는 로컬 SQLite에만 저장합니다.
+
+운영·백업·복구 절차는 [원장 운영 Runbook](docs/operations/ledger-runbook.md)을 따릅니다.
 
 ## 호스팅 대시보드
 
@@ -94,8 +105,9 @@ node -e "console.log(require('crypto').createHash('sha256').update('원하는비
 ## 리포트 정확성 원칙
 
 - 현재 자산 현황은 실행 시점 Upbit/KIS/가격 API 평가값을 기준으로 합니다.
-- 대시보드 수익률은 일간/주간/월간 수익률이 아니라 매입가 대비 누계 평가손익률입니다. KIS는 계좌 잔고 API의 평가손익률을 사용하고, 코인은 평균매수가와 현재가 기준으로 계산합니다.
-- 평가액 추세는 히스토리 스냅샷 기준이며, 입출금 보정은 적용하지 않습니다.
+- v1 대시보드의 종목 수익률은 매입가 대비 누계 평가손익률입니다.
+- 로컬 v2 성과 요약의 누적·당월 수익률은 외부 입출금 영향을 제거한 TWR입니다.
+- 대사 실패, fallback 평가, 정확한 경계 평가값이 없는 입출금 구간은 `provisional`로 표시합니다.
 - 알 수 없는 사실은 `확인 불가`로 표시합니다.
 - Codex의 해석이나 예상은 `Codex 해석` 또는 `Codex 추정`으로 명시합니다.
 - PDF와 텔레그램 캡션은 같은 구조화 JSON을 기준으로 생성하며, 전송 전 총자산/자산군 합계/비중/변화율을 검증합니다.

@@ -1,13 +1,22 @@
 import hashlib
 import logging
+import math
 import platform
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .config import AppConfig, AssetConfig
-from .dashboard_data import build_dashboard_payload, load_dashboard_source_payload, upload_dashboard_payload
+from .dashboard_data import build_dashboard_payload, build_dashboard_payload_v2, load_dashboard_source_payload, upload_dashboard_payload
 from .history import HistoryRepository
+from .ledger.import_history import import_history_json
+from .ledger.ingestion import add_manual_cash_flow
+from .ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
+from .ledger.reconciliation import reconcile_asset_quantities
+from .ledger.repository import LedgerRepository
 from .message_format import split_message
+from .models import ReconciliationResult
 from .news_digest import write_hourly_codex_source
 from .notifiers.base import Notifier
 from .notifiers.console import ConsoleNotifier
@@ -15,16 +24,29 @@ from .notifiers.telegram import TelegramNotifier
 from .notifiers.windows import WindowsNotifier
 from .news_llm import LlmNewsProvider, OpenAiNewsAnalyzer
 from .pdf_report import render_weekly_report_pdf
+from .performance.benchmark import BenchmarkWeight
+from .performance.service import build_performance_summary, save_dashboard_payload_v2
+from .performance.twr import ValuationPoint
 from .portfolio.calculator import evaluate_portfolio
 from .providers.config_portfolio_provider import ConfigPortfolioProvider
-from .providers.kis import KisDomesticStockClient, KisPortfolioProvider, KisTokenClient
+from .providers.kis import KST, KisDomesticStockClient, KisPortfolioProvider, KisTokenClient, parse_kis_daily_executions
 from .providers.mock_price_provider import MockPriceProvider
 from .providers.noop_news_provider import NoopNewsProvider
 from .providers.portfolio_provider import PortfolioProvider
 from .providers.price_provider import PriceProvider
 from .providers.rss_news_provider import RssNewsProvider
 from .providers.simple_http_price_provider import SimpleHttpPriceProvider
-from .providers.upbit import UpbitAccountClient, UpbitPortfolioProvider, UpbitPriceProvider
+from .providers.upbit import (
+    UpbitAccountClient,
+    UpbitPortfolioProvider,
+    UpbitPriceProvider,
+    fetch_upbit_closed_orders,
+    fetch_upbit_deposits,
+    fetch_upbit_withdraws,
+    parse_upbit_closed_orders,
+    parse_upbit_deposits,
+    parse_upbit_withdraws,
+)
 from .providers.news_provider import NewsProvider
 from .report_data import build_portfolio_report_source, build_report_caption, build_report_payload, build_weekly_report_source_from_payload, load_report_payload_for_path, write_report_artifact
 from .report_validation import require_valid_report_payload
@@ -34,6 +56,182 @@ from .rules.engine import RuleEngine
 from .weekly_report import build_weekly_report_source, build_weekly_report_telegram_summary, write_weekly_report_source
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        raise ValueError("occurred_at must be a datetime")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _cursor_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
+def _latest_portfolio_account(
+    snapshots: List[AccountSnapshot],
+) -> AccountSnapshot | None:
+    portfolio = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.provider == "portfolio" and snapshot.data_status == "actual"
+    ]
+    return portfolio[-1] if portfolio else None
+
+
+def _latest_actual_at(snapshots: List[AccountSnapshot]) -> datetime | None:
+    actual = [
+        snapshot.captured_at
+        for snapshot in snapshots
+        if snapshot.data_status == "actual"
+    ]
+    return max(actual, key=_as_utc) if actual else None
+
+
+def _valuation_points(
+    repository: LedgerRepository,
+    accounts: List[AccountSnapshot],
+    events: List[LedgerEvent],
+    latest_reconciliation_status: str,
+    tolerance: float,
+) -> List[ValuationPoint]:
+    external_events = [event for event in events if event.external_cash_flow]
+    points = []
+    previous_account = None
+    for index, account in enumerate(accounts):
+        cash_flow = (
+            0.0
+            if previous_account is None
+            else math.fsum(
+                event.cash_flow_krw
+                for event in external_events
+                if _as_utc(previous_account.captured_at) < _as_utc(event.occurred_at)
+                <= _as_utc(account.captured_at)
+            )
+        )
+        reconciliation_status = (
+            latest_reconciliation_status
+            if index == len(accounts) - 1
+            else "reconciled"
+        )
+        if account.data_status != "actual" or cash_flow != 0:
+            reconciliation_status = "reconciliation_required"
+        if previous_account is not None:
+            interval = _reconcile_account_pair(
+                repository, previous_account, account, tolerance
+            )
+            if interval.status != "reconciled":
+                reconciliation_status = "reconciliation_required"
+        points.append(
+            ValuationPoint(
+                captured_at=account.captured_at,
+                total_value_krw=account.total_value_krw,
+                external_cash_flow_krw=cash_flow,
+                reconciliation_status=reconciliation_status,
+            )
+        )
+        previous_account = account
+    return points
+
+
+def _reconcile_stored_portfolio_quantities(
+    repository: LedgerRepository,
+    accounts: List[AccountSnapshot],
+    tolerance: float,
+) -> ReconciliationResult:
+    if len(accounts) < 2:
+        return ReconciliationResult("reconciled", {}, tolerance)
+    previous_account, latest_account = accounts[-2:]
+    return _reconcile_account_pair(repository, previous_account, latest_account, tolerance)
+
+
+def _reconcile_account_pair(
+    repository: LedgerRepository,
+    previous_account: AccountSnapshot,
+    latest_account: AccountSnapshot,
+    tolerance: float,
+) -> ReconciliationResult:
+    latest_assets = [
+        asset
+        for asset in repository.list_asset_snapshots(latest_account.captured_at)
+        if asset.provider == "portfolio" and asset.quantity is not None
+    ]
+    actual = {asset.asset_symbol: asset.quantity for asset in latest_assets}
+    previous = {
+        asset.asset_symbol: asset.quantity
+        for asset in repository.list_asset_snapshots(previous_account.captured_at)
+        if asset.provider == "portfolio"
+        and asset.quantity is not None
+    }
+    deltas: dict[str, list[float]] = defaultdict(list)
+    for event in repository.list_events(
+        previous_account.captured_at, latest_account.captured_at
+    ):
+        if (
+            event.asset_symbol is not None
+            and event.quantity is not None
+            and _as_utc(event.occurred_at) > _as_utc(previous_account.captured_at)
+        ):
+            deltas[event.asset_symbol].append(event.quantity)
+    return reconcile_asset_quantities(
+        previous,
+        {symbol: math.fsum(values) for symbol, values in deltas.items()},
+        actual,
+        tolerance,
+    )
+
+
+def _asset_group(asset_type: str) -> str:
+    return "isa" if asset_type == "equity" else asset_type
+
+
+def _profit_loss_rate(snapshot: AssetSnapshot) -> float | None:
+    if (
+        snapshot.quantity is None
+        or snapshot.average_buy_price_krw is None
+        or snapshot.quantity <= 0
+        or snapshot.average_buy_price_krw <= 0
+    ):
+        return None
+    cost = snapshot.quantity * snapshot.average_buy_price_krw
+    return (snapshot.value_krw - cost) / cost * 100
+
+
+def _safe_provider_status(
+    statuses: List[Dict[str, object]] | None,
+    portfolio_status: str,
+    last_actual_at: datetime | None,
+) -> List[Dict[str, object]]:
+    last_actual = last_actual_at.isoformat(timespec="seconds") if last_actual_at else None
+    if not statuses:
+        return [
+            {
+                "provider": "portfolio",
+                "status": portfolio_status,
+                "used_fallback": portfolio_status == "fallback",
+                "last_actual_at": last_actual,
+            }
+        ]
+    return [
+        {
+            "provider": str(item.get("provider") or "unknown"),
+            "status": "fallback" if item.get("used_fallback") else "actual",
+            "used_fallback": bool(item.get("used_fallback")),
+            "last_actual_at": last_actual,
+        }
+        for item in statuses
+    ]
 
 
 class PortfolioWatchdogApp:
@@ -49,6 +247,7 @@ class PortfolioWatchdogApp:
         self.notifier = self._build_notifier()
         self.price_provider = self._build_price_provider()
         self.rule_engine = RuleEngine(self.config.alert_settings, self.repository)
+        self._ledger_repository: Optional[LedgerRepository] = None
 
     def _build_portfolio_provider(self) -> PortfolioProvider:
         provider: PortfolioProvider = ConfigPortfolioProvider(self.config)
@@ -104,6 +303,385 @@ class PortfolioWatchdogApp:
         assets = self.portfolio_provider.get_assets()
         prices = self.price_provider.get_prices(self._resolve_coin_symbols(assets))
         return assets, evaluate_portfolio(assets, prices)
+
+    @property
+    def ledger_path(self) -> Path:
+        return Path(self.env.get("WATCHDOG_LEDGER_PATH") or self.config.ledger.path)
+
+    @property
+    def ledger_repository(self) -> LedgerRepository:
+        if self._ledger_repository is None:
+            self._ledger_repository = LedgerRepository(self.ledger_path)
+        return self._ledger_repository
+
+    def add_cash_flow(self, amount: float, occurred_at: datetime, memo: str) -> bool:
+        occurred_at = _as_utc(occurred_at)
+        key_material = f"{float(amount):.17g}\n{occurred_at.isoformat()}\n{memo}"
+        idempotency_key = f"manual:{hashlib.sha256(key_material.encode('utf-8')).hexdigest()}"
+        return add_manual_cash_flow(
+            self.ledger_repository,
+            occurred_at,
+            amount,
+            memo,
+            idempotency_key,
+        )
+
+    def sync_ledger(self) -> Dict[str, object]:
+        now = _as_utc(_utc_now())
+        repository = self.ledger_repository
+        history_path = Path(self.config.snapshot.history_path)
+        if history_path.exists():
+            import_history_json(history_path, repository)
+
+        self._save_target_allocation(repository, now)
+        previous_account = _latest_portfolio_account(repository.list_account_snapshots())
+        self._sync_provider_events(repository, now)
+        assets, portfolio = self._evaluate_current_portfolio()
+        raw_provider_status = self._provider_status()
+        portfolio_status = (
+            "fallback"
+            if any(item.get("used_fallback") for item in raw_provider_status)
+            else "actual"
+        )
+        last_actual_at = (
+            _latest_actual_at(repository.list_account_snapshots())
+            if portfolio_status == "fallback"
+            else now
+        )
+        repository.upsert_snapshot(
+            AccountSnapshot(
+                provider="portfolio",
+                captured_at=now,
+                total_value_krw=portfolio.total_value_krw,
+                data_status=portfolio_status,
+            ),
+            [
+                AssetSnapshot(
+                    provider="portfolio",
+                    captured_at=now,
+                    asset_symbol=asset.symbol,
+                    asset_type=asset.asset_type,
+                    value_krw=asset.current_value_krw,
+                    quantity=asset.current_quantity,
+                    unit_price_krw=(
+                        asset.price_quote.price_krw
+                        if asset.price_quote is not None
+                        else None
+                    ),
+                    average_buy_price_krw=asset.average_buy_price_krw,
+                    data_status=portfolio_status,
+                )
+                for asset in portfolio.assets
+            ],
+        )
+        reconciliation = self._reconcile_current_quantities(
+            repository, previous_account, assets, now
+        )
+        summary = self._performance_summary_from_ledger(
+            repository,
+            generated_at=now,
+            reconciliation_status=reconciliation.status,
+            portfolio_status=portfolio_status,
+            last_actual_at=last_actual_at,
+            provider_status=raw_provider_status,
+        )
+        payload = build_dashboard_payload_v2(summary)
+        save_dashboard_payload_v2(
+            payload, self.ledger_path.parent / "dashboard_v2_latest.json"
+        )
+        return payload
+
+    def performance_summary(self) -> Dict[str, object]:
+        return self._performance_summary_from_ledger(
+            self.ledger_repository,
+            generated_at=_as_utc(_utc_now()),
+        )
+
+    def _sync_provider_events(
+        self, repository: LedgerRepository, now: datetime
+    ) -> None:
+        upbit_client, kis_client = self._provider_clients()
+        portfolio_config = self.config.portfolio_provider
+        upbit_configured = (
+            portfolio_config.provider_type == "upbit"
+            or portfolio_config.coin_provider_type == "upbit"
+        )
+        kis_configured = (
+            portfolio_config.provider_type == "kis"
+            or portfolio_config.equity_provider_type == "kis"
+        )
+        if upbit_configured and upbit_client is None:
+            raise RuntimeError("Upbit provider is configured but its client is unavailable")
+        if kis_configured and kis_client is None:
+            raise RuntimeError("KIS provider is configured but its client is unavailable")
+        if upbit_client is not None:
+            self._sync_upbit_events(repository, upbit_client, now)
+        if kis_client is not None:
+            self._sync_kis_events(repository, kis_client, now)
+
+    def _provider_clients(self):
+        upbit_client = None
+        kis_client = None
+        provider = self.portfolio_provider
+        while provider is not None:
+            if upbit_client is None and hasattr(provider, "account_client"):
+                upbit_client = provider.account_client
+            if kis_client is None and hasattr(provider, "stock_client"):
+                kis_client = provider.stock_client
+            provider = getattr(provider, "base_provider", None)
+        return upbit_client, kis_client
+
+    def _sync_upbit_events(
+        self, repository: LedgerRepository, client, now: datetime
+    ) -> None:
+        checkpoint = now.isoformat()
+        order_cursor = _cursor_datetime(repository.get_cursor("upbit", "closed_orders"))
+        order_start = max(
+            order_cursor - timedelta(days=7) if order_cursor else now - timedelta(days=7),
+            now - timedelta(days=90),
+        )
+        order_rows = (
+            fetch_upbit_closed_orders(client, order_start, now)
+            if order_start < now
+            else []
+        )
+        repository.upsert_event_page(
+            parse_upbit_closed_orders(order_rows),
+            "upbit",
+            "closed_orders",
+            checkpoint,
+            now,
+        )
+        for stream, fetch, parse in (
+            ("deposits", fetch_upbit_deposits, parse_upbit_deposits),
+            ("withdraws", fetch_upbit_withdraws, parse_upbit_withdraws),
+        ):
+            cursor = _cursor_datetime(repository.get_cursor("upbit", stream))
+            overlap_start = (
+                cursor - timedelta(days=7) if cursor else now - timedelta(days=7)
+            )
+            events = [
+                event
+                for event in parse(fetch(client))
+                if _as_utc(event.occurred_at) >= overlap_start
+                and _as_utc(event.occurred_at) <= now
+            ]
+            repository.upsert_event_page(events, "upbit", stream, checkpoint, now)
+
+    def _sync_kis_events(
+        self, repository: LedgerRepository, client, now: datetime
+    ) -> None:
+        cursor = _cursor_datetime(repository.get_cursor("kis", "daily_executions"))
+        today = now.astimezone(KST).date()
+        earliest = today - timedelta(days=90)
+        start = max(
+            earliest,
+            (
+                (cursor - timedelta(days=7)).astimezone(KST).date()
+                if cursor
+                else today - timedelta(days=7)
+            ),
+        )
+        rows = client.get_daily_executions(
+            start.strftime("%Y%m%d"), today.strftime("%Y%m%d")
+        )
+        mapping = {
+            asset.broker_symbol: asset.symbol
+            for asset in self.config.assets
+            if asset.broker_symbol
+        }
+        events = [
+            event
+            for event in parse_kis_daily_executions(rows, mapping)
+            if _as_utc(event.occurred_at) <= now
+        ]
+        repository.upsert_event_page(
+            events, "kis", "daily_executions", now.isoformat(), now
+        )
+
+    def _reconcile_current_quantities(
+        self,
+        repository: LedgerRepository,
+        previous_account: AccountSnapshot | None,
+        current_assets: List[AssetConfig],
+        now: datetime,
+    ) -> ReconciliationResult:
+        tolerance = self.config.ledger.reconciliation_quantity_tolerance
+        if previous_account is None:
+            return ReconciliationResult("reconciled", {}, tolerance)
+        actual = {
+            asset.symbol: asset.current_quantity
+            for asset in current_assets
+            if asset.current_quantity is not None
+        }
+        previous = {
+            asset.asset_symbol: asset.quantity
+            for asset in repository.list_asset_snapshots(previous_account.captured_at)
+            if asset.provider == "portfolio"
+            and asset.quantity is not None
+        }
+        deltas: dict[str, list[float]] = defaultdict(list)
+        for event in repository.list_events(previous_account.captured_at, now):
+            if (
+                event.asset_symbol is not None
+                and event.quantity is not None
+                and _as_utc(event.occurred_at) > _as_utc(previous_account.captured_at)
+            ):
+                deltas[event.asset_symbol].append(event.quantity)
+        return reconcile_asset_quantities(
+            previous,
+            {symbol: math.fsum(values) for symbol, values in deltas.items()},
+            actual,
+            tolerance,
+        )
+
+    def _save_target_allocation(
+        self, repository: LedgerRepository, now: datetime
+    ) -> None:
+        targets = {"coin": 0.0, "isa": 0.0, "cash": 0.0}
+        for asset in self.config.assets:
+            group = _asset_group(asset.asset_type)
+            if group in targets:
+                targets[group] += asset.target_weight
+        if not any(targets.values()):
+            return
+        benchmarks = {
+            "coin": "btc_krw",
+            "isa": "sp500_krw",
+            "cash": "cash_zero",
+        }
+        try:
+            repository.save_target_allocation(
+                [
+                    BenchmarkWeight(
+                        now.astimezone(KST).date(),
+                        group,
+                        targets[group],
+                        benchmarks[group],
+                    )
+                    for group in ("coin", "isa", "cash")
+                ]
+            )
+        except ValueError as error:
+            if "conflict" not in str(error):
+                raise
+            logger.warning("Target allocation changed within the same KST date; keeping existing version")
+
+    def _performance_summary_from_ledger(
+        self,
+        repository: LedgerRepository,
+        generated_at: datetime,
+        reconciliation_status: str | None = None,
+        portfolio_status: str | None = None,
+        last_actual_at: datetime | None = None,
+        provider_status: List[Dict[str, object]] | None = None,
+    ) -> Dict[str, object]:
+        all_accounts = repository.list_account_snapshots()
+        accounts = [
+            item
+            for item in all_accounts
+            if item.provider == "portfolio"
+        ]
+        latest = accounts[-1] if accounts else None
+        if reconciliation_status is None:
+            actual_accounts = [
+                account for account in accounts if account.data_status == "actual"
+            ]
+            reconciliation_status = _reconcile_stored_portfolio_quantities(
+                repository,
+                actual_accounts,
+                self.config.ledger.reconciliation_quantity_tolerance,
+            ).status
+        if portfolio_status is None:
+            portfolio_status = (
+                latest.data_status
+                if latest is not None and latest.data_status in {"actual", "fallback"}
+                else "stale"
+            )
+        if last_actual_at is None:
+            last_actual_at = _latest_actual_at(all_accounts)
+        points = _valuation_points(
+            repository,
+            accounts,
+            repository.list_events(),
+            reconciliation_status,
+            self.config.ledger.reconciliation_quantity_tolerance,
+        )
+        month_points = [
+            point
+            for point in points
+            if (point.captured_at.year, point.captured_at.month)
+            == (generated_at.year, generated_at.month)
+        ]
+        latest_assets = (
+            [
+                asset
+                for asset in repository.list_asset_snapshots(latest.captured_at)
+                if asset.provider == "portfolio"
+            ]
+            if latest is not None
+            else []
+        )
+        asset_groups, assets = self._snapshot_summaries(latest_assets)
+        return build_performance_summary(
+            valuation_points=points,
+            month_points=month_points,
+            benchmark_return=None,
+            asset_groups=asset_groups,
+            assets=assets,
+            provider_status=_safe_provider_status(
+                provider_status,
+                portfolio_status,
+                last_actual_at,
+            ),
+            generated_at=generated_at,
+            portfolio_status=portfolio_status,
+            last_actual_at=last_actual_at,
+            reconciliation_status=reconciliation_status,
+        )
+
+    def _snapshot_summaries(
+        self, snapshots: List[AssetSnapshot]
+    ) -> tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+        total = math.fsum(snapshot.value_krw for snapshot in snapshots)
+        config_by_symbol = {asset.symbol: asset for asset in self.config.assets}
+        assets: List[Dict[str, object]] = []
+        values: dict[str, float] = defaultdict(float)
+        targets: dict[str, float] = defaultdict(float)
+        for config_asset in self.config.assets:
+            targets[_asset_group(config_asset.asset_type)] += config_asset.target_weight
+        for snapshot in snapshots:
+            config_asset = config_by_symbol.get(snapshot.asset_symbol)
+            weight_percent = snapshot.value_krw / total * 100 if total else 0.0
+            target_weight = config_asset.target_weight if config_asset else 0.0
+            item: Dict[str, object] = {
+                "symbol": snapshot.asset_symbol,
+                "name": config_asset.name if config_asset else snapshot.asset_symbol,
+                "asset_type": snapshot.asset_type,
+                "value_krw": snapshot.value_krw,
+                "weight_percent": weight_percent,
+                "target_diff_percentage_points": weight_percent - target_weight * 100,
+            }
+            profit_rate = _profit_loss_rate(snapshot)
+            if profit_rate is not None:
+                item["profit_loss_rate_percent"] = profit_rate
+            assets.append(item)
+            values[_asset_group(snapshot.asset_type)] += snapshot.value_krw
+        groups = []
+        for group in ("coin", "isa", "cash"):
+            if group not in values and group not in targets:
+                continue
+            weight_percent = values[group] / total * 100 if total else 0.0
+            groups.append(
+                {
+                    "asset_group": group,
+                    "value_krw": values[group],
+                    "weight_percent": weight_percent,
+                    "target_diff_percentage_points": weight_percent
+                    - targets[group] * 100,
+                }
+            )
+        return groups, assets
 
     def run(self) -> None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

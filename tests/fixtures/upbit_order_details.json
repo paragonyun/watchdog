@@ -1,0 +1,56 @@
+[
+  {
+    "uuid": "order-1",
+    "market": "KRW-BTC",
+    "side": "bid",
+    "paid_fee": "15",
+    "trades_count": 2,
+    "trades": [
+      {
+        "market": "KRW-BTC",
+        "uuid": "trade-1",
+        "price": "10000000",
+        "volume": "0.001",
+        "funds": "10000",
+        "created_at": "2026-05-01T09:00:00+09:00",
+        "side": "bid"
+      },
+      {
+        "market": "KRW-BTC",
+        "uuid": "trade-2",
+        "price": "10000000",
+        "volume": "0.002",
+        "funds": "20000",
+        "created_at": "2026-05-01T09:01:00+09:00",
+        "side": "bid"
+      }
+    ]
+  },
+  {
+    "uuid": "order-2",
+    "market": "KRW-BTC",
+    "side": "ask",
+    "paid_fee": "6",
+    "trades_count": 1,
+    "trades": [
+      {
+        "market": "KRW-BTC",
+        "uuid": "trade-3",
+        "price": "10000000",
+        "volume": "0.003",
+        "funds": "30000",
+        "fee": "2.5",
+        "created_at": "2026-05-02T00:00:00Z",
+        "side": "ask"
+      }
+    ]
+  },
+  {
+    "uuid": "order-empty",
+    "market": "KRW-BTC",
+    "side": "ask",
+    "paid_fee": "0",
+    "trades_count": 0,
+    "trades": []
+  }
+]

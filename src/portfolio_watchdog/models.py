@@ -3,6 +3,13 @@ from datetime import datetime
 from typing import List, Optional
 
 
+@dataclass(frozen=True)
+class ReconciliationResult:
+    status: str
+    differences: dict[str, float]
+    tolerance: float
+
+
 @dataclass
 class PriceQuote:
     symbol: str

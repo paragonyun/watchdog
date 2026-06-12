@@ -1,5 +1,7 @@
 import argparse
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .app import PortfolioWatchdogApp
@@ -11,14 +13,22 @@ from .setup_wizard import run_setup_wizard
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portfolio Watchdog")
-    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "send-sample-reports", "install-schedule", "check-config", "send-test-alert"])
+    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
     parser.add_argument("--config", default=None, help="설정 파일 경로")
     parser.add_argument("--env", default=None, help="환경 변수 파일 경로")
     parser.add_argument("--path", default=None, help="리포트/메시지/대시보드 원본 파일 경로")
     parser.add_argument("--output", default=None, help="render-report-pdf/complete-report에서 생성할 PDF 파일 경로")
     parser.add_argument("--sync-dashboard", action="store_true", help="complete-report 실행 후 대시보드를 동기화")
+    parser.add_argument("--amount", type=float, default=None)
+    parser.add_argument("--occurred-at", default=None)
+    parser.add_argument("--memo", default=None)
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "setup":
@@ -87,3 +97,43 @@ def main() -> None:
         app.check_config()
     elif args.command == "send-test-alert":
         app.send_test_alert()
+    elif args.command in {"sync-ledger", "add-cash-flow", "performance-summary"}:
+        try:
+            if args.command == "sync-ledger":
+                result = app.sync_ledger()
+            elif args.command == "performance-summary":
+                result = app.performance_summary()
+            else:
+                result = app.add_cash_flow(
+                    _required_amount(args.amount),
+                    _parse_occurred_at(args.occurred_at),
+                    _required_memo(args.memo),
+                )
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        except Exception as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+
+
+def _required_amount(value: float | None) -> float:
+    if value is None:
+        raise ValueError("add-cash-flow requires --amount")
+    return value
+
+
+def _required_memo(value: str | None) -> str:
+    if value is None or not value.strip():
+        raise ValueError("add-cash-flow requires a non-empty --memo")
+    return value
+
+
+def _parse_occurred_at(value: str | None) -> datetime:
+    if value is None:
+        raise ValueError("add-cash-flow requires --occurred-at")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("--occurred-at must be an ISO datetime") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

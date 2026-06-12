@@ -1,0 +1,32 @@
+[
+  {
+    "uuid": "order-1",
+    "market": "KRW-BTC",
+    "side": "bid",
+    "state": "done",
+    "created_at": "2026-05-01T09:00:00+09:00",
+    "executed_volume": "0.003",
+    "paid_fee": "15",
+    "trades_count": 2
+  },
+  {
+    "uuid": "order-2",
+    "market": "KRW-BTC",
+    "side": "ask",
+    "state": "done",
+    "created_at": "2026-05-02T00:00:00+09:00",
+    "executed_volume": "0.003",
+    "paid_fee": "6",
+    "trades_count": 1
+  },
+  {
+    "uuid": "order-empty",
+    "market": "KRW-BTC",
+    "side": "ask",
+    "state": "cancel",
+    "created_at": "2026-05-02T01:00:00+09:00",
+    "executed_volume": "0",
+    "paid_fee": "0",
+    "trades_count": 0
+  }
+]
