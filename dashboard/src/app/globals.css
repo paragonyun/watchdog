@@ -217,6 +217,62 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
 .portfolio-empty { color: var(--muted); font-size: 11px; margin: 0; padding: 24px; text-align: center; }
 .portfolio-footnote { color: var(--muted); display: flex; font-size: 9px; justify-content: space-between; margin: 0 auto; max-width: 1520px; padding: 12px 2px 0; }
 
+.risk-main { margin-right: auto; max-width: 1640px; }
+.risk-title { align-items: end; display: flex; justify-content: space-between; margin: 0 auto 20px; max-width: 1520px; }
+.risk-title > div:first-child > span { color: var(--red); font-size: 10px; font-weight: 800; }
+.risk-title h1 { font-size: 28px; margin: 5px 0 7px; }
+.risk-title p { color: var(--muted); font-size: 12px; margin: 0; }
+.risk-posture { border-left: 3px solid var(--green); padding: 3px 0 3px 14px; text-align: right; }
+.risk-posture.medium { border-left-color: var(--orange); }
+.risk-posture.high { border-left-color: var(--red); }
+.risk-posture span, .risk-posture small { color: var(--muted); display: block; font-size: 10px; }
+.risk-posture strong { display: block; font-size: 24px; margin: 4px 0; }
+.risk-posture.low strong { color: var(--green); }
+.risk-posture.medium strong { color: var(--orange); }
+.risk-posture.high strong { color: var(--red); }
+.risk-kpis { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 0 auto 14px; max-width: 1520px; overflow: hidden; }
+.risk-kpi { border-right: 1px solid var(--line); min-width: 0; padding: 16px; }
+.risk-kpi:last-child { border-right: 0; }
+.risk-kpi span, .risk-kpi small { color: var(--muted); display: block; font-size: 10px; }
+.risk-kpi strong { display: block; font-size: 21px; margin: 11px 0 8px; overflow-wrap: anywhere; }
+.risk-kpi.high strong { color: var(--red); }
+.risk-kpi.medium strong { color: var(--orange); }
+.risk-kpi.low strong { color: var(--ink); }
+.risk-layout { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .8fr); margin: 0 auto; max-width: 1520px; }
+.risk-check-panel { grid-row: span 2; }
+.risk-check-list { display: grid; gap: 8px; }
+.risk-check { align-items: start; border: 1px solid var(--line); border-left: 3px solid var(--green); display: grid; gap: 12px; grid-template-columns: 42px 1fr; padding: 13px; }
+.risk-check.medium { border-left-color: var(--orange); }
+.risk-check.high { border-left-color: var(--red); }
+.risk-check > span { background: var(--green-soft); color: var(--green); font-size: 9px; font-weight: 800; padding: 5px 4px; text-align: center; }
+.risk-check.medium > span { background: var(--orange-soft); color: var(--orange); }
+.risk-check.high > span { background: var(--red-soft); color: var(--red); }
+.risk-check h2 { display: inline; font-size: 12px; margin: 0; }
+.risk-check strong { float: right; font-size: 12px; }
+.risk-check p { color: var(--muted); font-size: 10px; line-height: 1.45; margin: 7px 0 6px; }
+.risk-check small { color: #8b98aa; font-size: 9px; }
+.risk-bar-list, .risk-deviation-list { display: grid; gap: 16px; }
+.risk-bar-list article > div:first-child, .risk-deviation-list article > div:first-child { align-items: baseline; display: grid; gap: 8px; grid-template-columns: 1fr auto auto; }
+.risk-bar-list strong, .risk-deviation-list strong { font-size: 11px; }
+.risk-bar-list span, .risk-deviation-list span { color: var(--muted); font-size: 9px; }
+.risk-bar-list b { font-size: 10px; }
+.risk-bar-track, .risk-deviation-track { background: #edf1f6; height: 8px; margin-top: 7px; position: relative; }
+.risk-bar-track i { background: var(--red); display: block; height: 100%; }
+.risk-deviation-list b { color: var(--orange); font-size: 10px; }
+.risk-deviation-track i { display: block; height: 100%; }
+.risk-deviation-track i.isa { background: var(--blue); }
+.risk-deviation-track i.coin { background: var(--green); }
+.risk-deviation-track i.cash { background: var(--orange); }
+.risk-deviation-track em { background: var(--ink); height: 14px; position: absolute; top: -3px; width: 2px; }
+.loss-panel { grid-column: 1 / -1; }
+.risk-loss-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.risk-loss-list article { border-right: 1px solid var(--line); display: grid; gap: 16px; grid-template-columns: 1.2fr 1fr 1fr; padding: 13px; }
+.risk-loss-list article:nth-child(3n) { border-right: 0; }
+.risk-loss-list strong, .risk-loss-list b { display: block; font-size: 10px; overflow-wrap: anywhere; }
+.risk-loss-list span, .risk-loss-list small { color: var(--muted); display: block; font-size: 9px; margin-top: 4px; }
+.risk-empty { color: var(--muted); font-size: 10px; margin: 0; padding: 24px; text-align: center; }
+.risk-footnote { color: var(--muted); display: flex; font-size: 9px; justify-content: space-between; margin: 0 auto; max-width: 1520px; padding: 12px 2px 0; }
+
 .empty-dashboard-page { margin: 0 auto; max-width: 780px; padding: 64px 24px; }
 .empty-dashboard-page > .brand { margin-bottom: 28px; }
 .empty-dashboard-page h1 { font-size: 22px; margin: 0 0 10px; }
@@ -295,4 +351,26 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
   .portfolio-metric small { display: block; }
   .portfolio-footnote { display: block; line-height: 1.5; margin: 0 10px; padding: 12px 2px 0; }
   .portfolio-footnote span { display: block; margin-bottom: 4px; }
+  .risk-main { padding-bottom: 20px; }
+  .risk-title { align-items: start; background: var(--surface); display: block; margin: 0; padding: 18px 16px 20px; }
+  .risk-title h1 { font-size: 24px; }
+  .risk-title p { font-size: 10px; line-height: 1.5; }
+  .risk-posture { border-left: 0; border-top: 1px solid var(--line); margin-top: 16px; padding: 14px 0 0; text-align: left; }
+  .risk-posture strong { font-size: 22px; }
+  .risk-kpis { border: 0; display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 10px; overflow: visible; }
+  .risk-kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 13px; }
+  .risk-kpi:last-child { border-right: 1px solid var(--line); }
+  .risk-kpi strong { font-size: 18px; }
+  .risk-layout { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); margin: 0 10px; }
+  .risk-check-panel { grid-row: auto; }
+  .risk-check { grid-template-columns: 38px 1fr; padding: 11px; }
+  .risk-check h2, .risk-check strong { display: block; float: none; }
+  .risk-check strong { margin-top: 4px; }
+  .risk-bar-list article > div:first-child, .risk-deviation-list article > div:first-child { grid-template-columns: 1fr auto; }
+  .risk-bar-list span, .risk-deviation-list span { grid-column: 1; }
+  .risk-loss-list { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .risk-loss-list article, .risk-loss-list article:nth-child(3n) { border-bottom: 1px solid var(--line); border-right: 0; grid-template-columns: 1.2fr 1fr 1fr; padding: 12px 0; }
+  .risk-loss-list article:last-child { border-bottom: 0; }
+  .risk-footnote { display: block; line-height: 1.5; margin: 0 10px; padding: 12px 2px 0; }
+  .risk-footnote span { display: block; margin-bottom: 4px; }
 }
