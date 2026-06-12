@@ -17,10 +17,10 @@ def install_windows_schedule(runner: Runner | None = None) -> None:
     workdir = get_executable_root()
     tasks: List[TaskSpec] = [
         ("PortfolioWatchdogNewsHourly", "check-news", "HOURLY", "00:00", None),
-        ("PortfolioWatchdogLedger0800", "sync-ledger", "DAILY", "08:00", None),
-        ("PortfolioWatchdogLedger1200", "sync-ledger", "DAILY", "12:00", None),
-        ("PortfolioWatchdogLedger1800", "sync-ledger", "DAILY", "18:00", None),
-        ("PortfolioWatchdogLedger2200", "sync-ledger", "DAILY", "22:00", None),
+        ("PortfolioWatchdogLedger0800", "sync-ledger --sync-dashboard", "DAILY", "08:00", None),
+        ("PortfolioWatchdogLedger1200", "sync-ledger --sync-dashboard", "DAILY", "12:00", None),
+        ("PortfolioWatchdogLedger1800", "sync-ledger --sync-dashboard", "DAILY", "18:00", None),
+        ("PortfolioWatchdogLedger2200", "sync-ledger --sync-dashboard", "DAILY", "22:00", None),
     ]
     for name, command, schedule, start_time, day in tasks:
         args: List[str] = [
@@ -49,9 +49,10 @@ def _task_command(workdir: Path, command: str) -> str:
 
 
 def _runtime_command(command: str) -> List[str]:
+    command_args = command.split()
     if getattr(sys, "frozen", False):
-        return [sys.executable, command]
-    return [sys.executable, "-m", "portfolio_watchdog", command]
+        return [sys.executable, *command_args]
+    return [sys.executable, "-m", "portfolio_watchdog", *command_args]
 
 
 def _update_windows_task_settings(task_name: str, runner: Runner) -> None:

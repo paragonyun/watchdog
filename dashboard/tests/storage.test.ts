@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getLatestDashboardData, resolveDashboardPayload } from "../src/lib/storage";
+import { blobKeyForPayload, getLatestDashboardData, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
 
 const validPayload = {
   schema_version: "dashboard_payload_v1",
@@ -40,6 +40,29 @@ test("valid blob payload is preferred over sample data", () => {
 
   assert.deepEqual(result.payload, validPayload);
   assert.equal(result.source, "blob");
+});
+
+test("v1 and v2 payloads use separate blob keys", () => {
+  assert.equal(blobKeyForPayload({ schema_version: "dashboard_payload_v1" }), "dashboard/latest.json");
+  assert.equal(blobKeyForPayload({ schema_version: "dashboard_payload_v2" }), "dashboard/v2-latest.json");
+});
+
+test("dashboard payload resolver keeps valid v1 and v2 data together", () => {
+  const v2 = {
+    schema_version: "dashboard_payload_v2",
+    generated_at: "2026-06-12T19:28:50+09:00",
+    total_value_krw: 1000,
+    data_freshness: {},
+    performance: {},
+    asset_groups: [],
+    assets: [],
+    provider_status: [],
+  };
+
+  const result = resolveDashboardPayloads(validPayload, v2);
+
+  assert.equal(result.v1?.schema_version, "dashboard_payload_v1");
+  assert.equal(result.v2?.schema_version, "dashboard_payload_v2");
 });
 
 test("production blob read delegates credential resolution to the Blob SDK", async () => {

@@ -16,7 +16,7 @@ python -m portfolio_watchdog render-report-pdf --path reports\weekly_report_fina
 python -m portfolio_watchdog send-report-document --path reports\weekly_report_final_YYYYMMDD_HHMM.pdf
 python -m portfolio_watchdog complete-report --path reports\portfolio_report_final_YYYYMMDD_HHMM.md --sync-dashboard
 python -m portfolio_watchdog sync-dashboard --path reports\portfolio_report_source_YYYYMMDD_HHMM.json
-python -m portfolio_watchdog sync-ledger
+python -m portfolio_watchdog sync-ledger --sync-dashboard
 python -m portfolio_watchdog add-cash-flow --amount 1000000 --occurred-at 2026-06-06T12:00:00 --memo "cash deposit"
 python -m portfolio_watchdog performance-summary
 python -m portfolio_watchdog send-message-file --path reports\hourly_news_codex_YYYYMMDD_HHMM.html
@@ -66,7 +66,7 @@ python -m portfolio_watchdog send-test-alert
 
 ## 로컬 투자 원장
 
-`sync-ledger`는 기존 JSON 평가 이력을 SQLite로 가져온 뒤 Upbit/KIS 조회 전용 API에서 거래 이력을 수집하고, 현재 평가 스냅샷·보유수량 대사·TWR 성과를 계산합니다. 결과 v2 payload는 기본적으로 `snapshots/dashboard_v2_latest.json`에만 저장되며 현재 Vercel v1 업로드 경로에는 전송하지 않습니다.
+`sync-ledger`는 기존 JSON 평가 이력을 SQLite로 가져온 뒤 Upbit/KIS 조회 전용 API에서 거래 이력을 수집하고, 현재 평가 스냅샷·보유수량 대사·TWR 성과를 계산합니다. 결과 v2 payload는 기본적으로 `snapshots/dashboard_v2_latest.json`에 저장되며, `--sync-dashboard`를 지정하면 개인정보 검사를 거쳐 Vercel 대시보드에도 업로드합니다.
 
 기본 SQLite 위치는 `snapshots/watchdog.db`입니다. `.env`의 `WATCHDOG_LEDGER_PATH`를 설정하면 YAML의 `ledger.path`보다 우선합니다. 수량, 평단, 거래 메모 등 민감한 원장 정보는 로컬 SQLite에만 저장합니다.
 

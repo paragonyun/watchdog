@@ -326,7 +326,17 @@ class PortfolioWatchdogApp:
             idempotency_key,
         )
 
-    def sync_ledger(self) -> Dict[str, object]:
+    def sync_ledger(self, sync_dashboard: bool = False) -> Dict[str, object]:
+        payload = self._sync_ledger_payload()
+        if sync_dashboard:
+            upload_dashboard_payload(
+                payload,
+                self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
+                self.env.get("WATCHDOG_UPLOAD_TOKEN"),
+            )
+        return payload
+
+    def _sync_ledger_payload(self) -> Dict[str, object]:
         now = _as_utc(_utc_now())
         repository = self.ledger_repository
         history_path = Path(self.config.snapshot.history_path)

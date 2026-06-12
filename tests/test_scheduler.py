@@ -44,3 +44,4 @@ def test_install_windows_schedule_updates_power_settings(monkeypatch, tmp_path) 
         "22:00",
     }
     assert all("sync-ledger" in " ".join(call) for call in ledger_calls)
+    assert all("--sync-dashboard" in " ".join(call) for call in ledger_calls)

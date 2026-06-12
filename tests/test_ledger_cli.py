@@ -35,6 +35,7 @@ def test_build_parser_keeps_existing_commands_and_adds_ledger_commands() -> None
 
     assert parser.parse_args(["run"]).command == "run"
     assert parser.parse_args(["sync-ledger"]).command == "sync-ledger"
+    assert parser.parse_args(["sync-ledger", "--sync-dashboard"]).sync_dashboard is True
     assert parser.parse_args(["performance-summary"]).command == "performance-summary"
     args = parser.parse_args(
         [
@@ -115,6 +116,29 @@ def test_main_converts_new_command_errors_to_system_exit_one(
         cli_module.main()
 
     assert raised.value.code == 1
+
+
+def test_main_routes_sync_ledger_dashboard_option(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            pass
+
+        def sync_ledger(self, sync_dashboard=False):
+            calls.append(sync_dashboard)
+            return {"schema_version": "dashboard_payload_v2"}
+
+    _patch_cli_runtime(monkeypatch, tmp_path, FakeApp)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["portfolio-watchdog", "sync-ledger", "--sync-dashboard"],
+    )
+
+    cli_module.main()
+
+    assert calls == [True]
 
 
 def test_add_cash_flow_is_deterministically_idempotent(tmp_path) -> None:
@@ -263,6 +287,34 @@ def test_sync_ledger_collects_in_order_writes_v2_and_performance_summary_is_offl
 
     assert summary["performance"]["status"] == "insufficient_data"
     assert summary["total_value_krw"] == payload["total_value_krw"]
+
+
+def test_sync_ledger_optionally_uploads_v2_payload(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={
+        "WATCHDOG_DASHBOARD_UPLOAD_URL": "https://example.com/api/upload",
+        "WATCHDOG_UPLOAD_TOKEN": "token",
+    })
+    uploaded = []
+    payload = {"schema_version": "dashboard_payload_v2"}
+
+    monkeypatch.setattr(
+        watchdog,
+        "_sync_ledger_payload",
+        lambda: payload,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "upload_dashboard_payload",
+        lambda value, endpoint, token: uploaded.append((value, endpoint, token)),
+    )
+
+    result = watchdog.sync_ledger(sync_dashboard=True)
+
+    assert result == payload
+    assert uploaded == [
+        (payload, "https://example.com/api/upload", "token"),
+    ]
 
 
 def test_performance_summary_reconciles_latest_snapshots_without_api(

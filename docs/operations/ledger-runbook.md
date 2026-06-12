@@ -3,13 +3,13 @@
 ## 기본 명령
 
 ```powershell
-python -m portfolio_watchdog sync-ledger
+python -m portfolio_watchdog sync-ledger --sync-dashboard
 python -m portfolio_watchdog add-cash-flow --amount 1000000 --occurred-at 2026-06-06T12:00:00 --memo "cash deposit"
 python -m portfolio_watchdog performance-summary
 python -m portfolio_watchdog install-schedule
 ```
 
-`sync-ledger`는 조회 전용 API 수집, 현재 평가 저장, 보유수량 대사, 성과 계산, 로컬 v2 payload 저장을 순서대로 실행합니다. `performance-summary`는 API를 호출하지 않고 SQLite만 읽습니다.
+`sync-ledger`는 조회 전용 API 수집, 현재 평가 저장, 보유수량 대사, 성과 계산, 로컬 v2 payload 저장을 순서대로 실행합니다. `--sync-dashboard`를 함께 사용하면 같은 v2 payload를 Vercel 대시보드에 업로드합니다. `performance-summary`는 API를 호출하지 않고 SQLite만 읽습니다.
 
 ## SQLite 위치와 백업
 

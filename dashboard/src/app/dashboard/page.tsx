@@ -1,240 +1,441 @@
 import { requireSession } from "@/lib/auth";
-import { buildAssetSections, type AssetSection } from "@/lib/asset-groups";
-import type { AssetSummary, DashboardPayload } from "@/lib/dashboard-payload";
-import { getLatestDashboardData } from "@/lib/storage";
+import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
+import { getLatestDashboardPayloads } from "@/lib/storage";
 
 import { logoutAction } from "../login/actions";
 
 export const dynamic = "force-dynamic";
 
+const topNavigation = ["대시보드", "포트폴리오", "분석", "리스크", "투자 의견", "리포트", "설정"];
+const sideNavigation = [
+  ["⌂", "홈"],
+  ["◷", "모니터링"],
+  ["▣", "포트폴리오"],
+  ["◇", "제안"],
+  ["▤", "리서치"],
+  ["○", "알림"],
+  ["⚙", "설정"],
+];
+
 export default async function DashboardPage() {
   await requireSession();
-  const { payload, source } = await getLatestDashboardData();
+  const { v1, v2 } = await getLatestDashboardPayloads();
 
-  if (!payload) {
+  if (!v1 && !v2) {
     return <EmptyDashboardPage />;
   }
 
-  const groups = payload.asset_groups;
-  const total = payload.total_value_krw || 1;
-  const assetSections = buildAssetSections(payload.assets, groups, total);
-
-  return (
-    <main className="dashboard-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Portfolio Watchdog</p>
-          <h1>자산 현황</h1>
-          {source === "sample" ? <p className="source-note">로컬 샘플 데이터</p> : null}
-        </div>
-        <form action={logoutAction}>
-          <button className="secondary-button" type="submit">
-            Sign out
-          </button>
-        </form>
-      </header>
-
-      <section className="metric-grid" aria-label="포트폴리오 요약">
-        <Metric label="총 자산" value={formatKrw(payload.total_value_krw)} detail={formatDate(payload.generated_at)} />
-        <Metric label="기간 변화" value={formatSignedKrw(payload.trend.change_krw)} detail={formatPercent(payload.trend.change_pct)} tone={payload.trend.change_krw >= 0 ? "positive" : "negative"} />
-        <Metric label="스냅샷" value={`${payload.trend.snapshot_count}개`} detail={payload.report_kind === "weekly" ? "weekly" : "portfolio"} />
-        <Metric label="Fallback" value={`${payload.provider_status.filter((item) => item.used_fallback).length}건`} detail={providerLabel(payload)} tone={payload.provider_status.some((item) => item.used_fallback) ? "warning" : "neutral"} />
-      </section>
-
-      <section className="content-band split">
-        <div className="panel">
-          <div className="panel-heading">
-            <h2>자산군 비중</h2>
-            <span>{formatKrw(total)}</span>
-          </div>
-          <div className="allocation-bar" aria-label="자산군 비중 막대">
-            <span className="coin" style={{ width: `${percentage(groups.coin, total)}%` }} />
-            <span className="equity" style={{ width: `${percentage(groups.equity, total)}%` }} />
-            <span className="cash" style={{ width: `${percentage(groups.cash, total)}%` }} />
-          </div>
-          <div className="group-list">
-            <GroupRow label="코인" value={groups.coin} total={total} tone="coin" />
-            <GroupRow label="ISA" value={groups.equity} total={total} tone="equity" />
-            <GroupRow label="현금" value={groups.cash} total={total} tone="cash" />
-          </div>
-        </div>
-
-        <div className="panel">
-          <div className="panel-heading">
-            <h2>뉴스 영향</h2>
-            <span>{payload.news_impacts.length}건</span>
-          </div>
-          <div className="news-list">
-            {payload.news_impacts.slice(0, 4).map((item) => (
-              <article className="news-item" key={`${item.title}-${item.impact_score}`}>
-                <div>
-                  <strong>{item.title}</strong>
-                  <p>{item.reason}</p>
-                </div>
-                <span className={impactClass(item.impact_score)}>{item.impact_score > 0 ? `+${item.impact_score}` : item.impact_score}</span>
-              </article>
-            ))}
-            {payload.news_impacts.length === 0 ? <p className="empty">확인된 주요 뉴스가 없습니다.</p> : null}
-          </div>
-        </div>
-      </section>
-
-      <section className="content-band">
-        <div className="panel">
-          <div className="panel-heading">
-            <h2>자산별 현황</h2>
-            <span>{payload.assets.length}개 종목</span>
-          </div>
-          <div className="asset-section-list">
-            {assetSections.map((section) => (
-              <AssetSectionPanel section={section} key={section.key} />
-            ))}
-          </div>
-        </div>
-      </section>
-    </main>
-  );
+  return <DashboardHome view={buildDashboardView(v1, v2)} />;
 }
 
-function Metric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "positive" | "negative" | "warning" }) {
-  return (
-    <article className={`metric-card ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <p>{detail}</p>
-    </article>
-  );
-}
+function DashboardHome({ view }: { view: DashboardView }) {
+  const cash = view.groups.find((group) => group.key === "cash");
 
-function GroupRow({ label, value, total, tone }: { label: string; value: number; total: number; tone: "coin" | "equity" | "cash" }) {
   return (
-    <div className="group-row">
-      <span className={`dot ${tone}`} />
-      <strong>{label}</strong>
-      <span>{formatKrw(value)}</span>
-      <em>{formatPercent(percentage(value, total))}</em>
+    <div className="app-frame">
+      <DesktopTopNavigation />
+      <DesktopSideNavigation />
+
+      <main className="dashboard-main">
+        <MobileHeader />
+
+        <section className="mobile-summary">
+          <span>총자산</span>
+          <div>
+            <strong>{formatKrw(view.totalValueKrw)}</strong>
+            <TrendValue value={view.periodChange.changeKrw} suffix="원" />
+          </div>
+          <small>{formatDate(view.generatedAt)} 기준</small>
+        </section>
+
+        <section className="kpi-strip" aria-label="핵심 투자 지표">
+          <Kpi label="총자산" value={formatKrw(view.totalValueKrw)} detail={`${formatDate(view.generatedAt)} 기준`} />
+          <Kpi
+            label="기간 변화"
+            value={formatSignedKrw(view.periodChange.changeKrw)}
+            detail={formatPercent(view.periodChange.changePct)}
+            tone={tone(view.periodChange.changeKrw)}
+          />
+          <Kpi
+            label="투자 성과 (TWR)"
+            value={formatPercent(view.performance.cumulativeTwrPct)}
+            detail={`당월 ${formatPercent(view.performance.monthTwrPct)}`}
+            tone={tone(view.performance.cumulativeTwrPct)}
+          />
+          <Kpi
+            label="벤치마크"
+            value={formatPercent(view.performance.benchmarkReturnPct)}
+            detail={`초과성과 ${formatPercent(view.performance.excessReturnPct)}`}
+            tone={tone(view.performance.excessReturnPct)}
+          />
+          <Kpi
+            label="현금 및 예수금"
+            value={formatKrw(cash?.valueKrw ?? 0)}
+            detail={`전체의 ${formatPercent(cash?.weightPercent ?? 0, false)}`}
+          />
+          <Kpi
+            label="주의 필요"
+            value={`${view.attention.length}건`}
+            detail={view.attention.length ? "확인 필요" : "특이사항 없음"}
+            tone={view.attention.length ? "warning" : "positive"}
+          />
+        </section>
+
+        <section className="hero-grid">
+          <PerformancePanel view={view} />
+          <AllocationPanel view={view} />
+          <AttentionPanel view={view} />
+        </section>
+
+        <section className="insight-grid">
+          <AssetPanel view={view} />
+          <EmptyInsightPanel title="주요 경제 일정" description="연결된 실제 경제 일정 데이터가 없습니다." />
+          <NewsPanel view={view} />
+          <EmptyInsightPanel title="리포트" description="웹에서 조회 가능한 리포트가 아직 없습니다." />
+          <EmptyInsightPanel title="투자 의견 및 논리" description="확정된 투자 의견이 아직 없습니다." wide />
+          <DataStatusPanel view={view} />
+        </section>
+
+        <footer className="dashboard-footer">
+          <span>TWR: 외부 현금흐름 영향을 제거한 시간가중수익률</span>
+          <span>데이터 기준: {formatDate(view.generatedAt)}</span>
+        </footer>
+      </main>
+
+      <MobileBottomNavigation />
     </div>
   );
 }
 
-function AssetSectionPanel({ section }: { section: AssetSection }) {
+function DesktopTopNavigation() {
   return (
-    <details className="asset-section">
-      <summary>
-        <span className={`dot ${section.key}`} />
-        <strong>{section.label}</strong>
-        <span>{formatKrw(section.value_krw)}</span>
-        <em>{formatPercent(section.weight_percent)}</em>
-        <small>{section.assets.length}개 종목</small>
-      </summary>
-      <div className="asset-section-body">
-        {section.assets.length > 0 ? (
-          <div className="asset-table" role="table" aria-label={`${section.label} 세부 종목`}>
-            <div className="asset-row asset-head" role="row">
-              <span>자산</span>
-              <span>평가액</span>
-              <span>비중</span>
-              <span>누계 수익률</span>
-              <span>출처</span>
-            </div>
-            {section.assets.map((asset) => (
-              <AssetRow asset={asset} key={`${section.key}-${asset.symbol}`} />
+    <header className="desktop-topnav">
+      <Brand />
+      <nav aria-label="주요 메뉴">
+        {topNavigation.map((item, index) => (
+          <span className={index === 0 ? "active" : ""} key={item}>
+            {item}
+          </span>
+        ))}
+      </nav>
+      <div className="top-actions">
+        <span className="icon-action" title="검색">⌕</span>
+        <span className="icon-action notification" title="알림">○</span>
+        <span className="profile-mark">JS</span>
+      </div>
+    </header>
+  );
+}
+
+function DesktopSideNavigation() {
+  return (
+    <aside className="desktop-sidenav" aria-label="보조 메뉴">
+      {sideNavigation.map(([icon, label], index) => (
+        <span className={index === 0 ? "active" : ""} key={label}>
+          <b>{icon}</b>
+          <small>{label}</small>
+        </span>
+      ))}
+    </aside>
+  );
+}
+
+function MobileHeader() {
+  return (
+    <header className="mobile-header">
+      <Brand />
+      <div>
+        <span className="icon-action" title="알림">○</span>
+        <span className="icon-action" title="메뉴">☰</span>
+      </div>
+    </header>
+  );
+}
+
+function Brand() {
+  return (
+    <div className="brand">
+      <span className="brand-shield">W</span>
+      <strong>PORTFOLIO<br />WATCHDOG</strong>
+    </div>
+  );
+}
+
+function Kpi({
+  label,
+  value,
+  detail,
+  tone: valueTone = "neutral",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: "neutral" | "positive" | "negative" | "warning";
+}) {
+  return (
+    <article className="kpi">
+      <span>{label}</span>
+      <strong className={`${valueTone}-text`}>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
+}
+
+function PerformancePanel({ view }: { view: DashboardView }) {
+  const values = [
+    { label: "포트폴리오 TWR", value: view.performance.cumulativeTwrPct, tone: "portfolio" },
+    { label: "혼합 벤치마크", value: view.performance.benchmarkReturnPct, tone: "benchmark" },
+    { label: "초과성과", value: view.performance.excessReturnPct, tone: "excess" },
+  ];
+  const available = values.filter((item) => item.value !== null);
+  const scale = Math.max(10, ...available.map((item) => Math.abs(item.value ?? 0)));
+
+  return (
+    <section className="surface performance-panel">
+      <PanelHeading title="투자 성과 (TWR)" meta={statusLabel(view.performance.status)} />
+      {available.length ? (
+        <>
+          <div className="performance-legend">
+            {values.map((item) => (
+              <span key={item.label}><i className={item.tone} />{item.label} <b>{formatPercent(item.value)}</b></span>
             ))}
           </div>
-        ) : (
-          <p className="empty">등록된 세부 종목이 없습니다.</p>
-        )}
+          <div className="comparison-chart" aria-label="TWR와 벤치마크 비교">
+            {values.map((item) => (
+              <div className="comparison-row" key={item.label}>
+                <span>{item.label}</span>
+                <div className="comparison-track">
+                  <i className={item.tone} style={{ width: `${Math.max(2, Math.abs(item.value ?? 0) / scale * 100)}%` }} />
+                </div>
+                <strong className={tone(item.value) + "-text"}>{formatPercent(item.value)}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="performance-note">
+            <span>최대 낙폭 <strong>{formatPercent(view.performance.maxDrawdownPct)}</strong></span>
+            <span>당월 TWR <strong>{formatPercent(view.performance.monthTwrPct)}</strong></span>
+          </div>
+        </>
+      ) : (
+        <EmptyState text="성과 계산에 필요한 평가 이력이 부족합니다." />
+      )}
+    </section>
+  );
+}
+
+function AllocationPanel({ view }: { view: DashboardView }) {
+  return (
+    <section className="surface allocation-panel">
+      <PanelHeading title="자산 배분 (현재 vs 목표)" meta="비중 · 목표 편차" />
+      <div className="allocation-list">
+        {view.groups.map((group) => (
+          <div className="allocation-item" key={group.key}>
+            <div>
+              <strong>{group.label}</strong>
+              <span>{formatKrw(group.valueKrw)}</span>
+              <b>{formatPercent(group.weightPercent, false)}</b>
+            </div>
+            <div className="allocation-track">
+              <i className={group.key} style={{ width: `${clamp(group.weightPercent)}%` }} />
+              {group.targetWeightPercent !== null ? (
+                <em style={{ left: `${clamp(group.targetWeightPercent)}%` }} title={`목표 ${formatPercent(group.targetWeightPercent, false)}`} />
+              ) : null}
+            </div>
+            <small>
+              {group.targetDiffPercentagePoints === null
+                ? "목표 비중 데이터 없음"
+                : `목표 대비 ${formatPercentagePoint(group.targetDiffPercentagePoints)}`}
+            </small>
+          </div>
+        ))}
       </div>
-    </details>
+    </section>
+  );
+}
+
+function AttentionPanel({ view }: { view: DashboardView }) {
+  return (
+    <section className="surface attention-panel">
+      <PanelHeading title={`주의 필요 (${view.attention.length})`} meta="" />
+      {view.attention.length ? (
+        <div className="attention-list">
+          {view.attention.map((item) => (
+            <article key={item.title}>
+              <span className={item.level}>{item.level === "high" ? "높음" : "중간"}</span>
+              <div><strong>{item.title}</strong><p>{item.detail}</p></div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyState text="현재 확인이 필요한 데이터 상태가 없습니다." />
+      )}
+    </section>
+  );
+}
+
+function AssetPanel({ view }: { view: DashboardView }) {
+  return (
+    <section className="surface asset-panel">
+      <PanelHeading title="포트폴리오" meta={`${view.assets.length}개 종목`} />
+      <div className="compact-groups">
+        {view.groups.map((group) => {
+          const assets = view.assets.filter((asset) => asset.assetType === group.key);
+          return (
+            <details key={group.key}>
+              <summary>
+                <span className={`group-dot ${group.key}`} />
+                <strong>{group.label}</strong>
+                <span>{formatKrw(group.valueKrw)}</span>
+                <b>{formatPercent(group.weightPercent, false)}</b>
+              </summary>
+              <div>
+                {assets.length ? assets.map((asset) => (
+                  <article className="compact-asset" key={asset.symbol}>
+                    <span><strong>{asset.name}</strong><small>{asset.symbol}</small></span>
+                    <span><b>{formatKrw(asset.valueKrw)}</b><small>평가액</small></span>
+                    <span className={tone(asset.profitLossRatePercent) + "-text"}>
+                      <b>{formatPercent(asset.profitLossRatePercent)}</b><small>누계 평가손익률</small>
+                    </span>
+                  </article>
+                )) : <EmptyState text="등록된 세부 종목이 없습니다." />}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function NewsPanel({ view }: { view: DashboardView }) {
+  return (
+    <section className="surface news-panel">
+      <PanelHeading title="관련 뉴스" meta={`${view.news.length}건`} />
+      {view.news.length ? (
+        <div className="news-list">
+          {view.news.slice(0, 5).map((news) => (
+            <article key={`${news.title}-${news.impact_score}`}>
+              <div>
+                <strong>{news.title}</strong>
+                <p>{news.reason}</p>
+              </div>
+              <span className={tone(news.impact_score) + "-text"}>{signed(news.impact_score)}</span>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyState text="현재 연결된 관련 뉴스가 없습니다." />
+      )}
+    </section>
+  );
+}
+
+function DataStatusPanel({ view }: { view: DashboardView }) {
+  return (
+    <section className="surface status-panel">
+      <PanelHeading title="데이터 상태" meta={statusLabel(view.status)} />
+      <div className="status-list">
+        {view.providers.length ? view.providers.map((provider) => (
+          <div key={provider.provider}>
+            <span className={provider.usedFallback ? "status-dot warning" : "status-dot healthy"} />
+            <strong>{provider.provider}</strong>
+            <span>{statusLabel(provider.status)}</span>
+          </div>
+        )) : <EmptyState text="제공자 상태 정보가 없습니다." />}
+      </div>
+      <p className="status-footnote">마지막 실제 데이터: {formatDate(view.lastActualAt)}</p>
+    </section>
+  );
+}
+
+function EmptyInsightPanel({ title, description, wide = false }: { title: string; description: string; wide?: boolean }) {
+  return (
+    <section className={`surface empty-insight ${wide ? "wide" : ""}`}>
+      <PanelHeading title={title} meta="" />
+      <EmptyState text={description} />
+    </section>
+  );
+}
+
+function PanelHeading({ title, meta }: { title: string; meta: string }) {
+  return <header className="panel-heading"><h2>{title}</h2>{meta ? <span>{meta}</span> : null}</header>;
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <div className="empty-state"><span>－</span><p>{text}</p></div>;
+}
+
+function MobileBottomNavigation() {
+  return (
+    <nav className="mobile-bottom-nav" aria-label="모바일 메뉴">
+      {sideNavigation.slice(0, 5).map(([icon, label], index) => (
+        <span className={index === 0 ? "active" : ""} key={label}><b>{icon}</b><small>{label}</small></span>
+      ))}
+    </nav>
   );
 }
 
 function EmptyDashboardPage() {
   return (
-    <main className="dashboard-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Portfolio Watchdog</p>
-          <h1>자산 현황</h1>
-        </div>
-        <form action={logoutAction}>
-          <button className="secondary-button" type="submit">
-            Sign out
-          </button>
-        </form>
-      </header>
-
-      <section className="content-band">
-        <div className="panel empty-panel">
-          <h2>업로드된 API 스냅샷이 없습니다</h2>
-          <p>Watchdog에서 대시보드 동기화를 실행하면 최신 요약 데이터가 표시됩니다.</p>
-        </div>
+    <main className="empty-dashboard-page">
+      <Brand />
+      <section className="surface">
+        <h1>업로드된 API 스냅샷이 없습니다</h1>
+        <p>Watchdog에서 대시보드 동기화를 실행하면 실제 요약 데이터가 표시됩니다.</p>
+        <form action={logoutAction}><button className="secondary-button" type="submit">Sign out</button></form>
       </section>
     </main>
   );
 }
 
-function AssetRow({ asset }: { asset: AssetSummary }) {
-  return (
-    <div className="asset-row" role="row">
-      <span>
-        <strong>{asset.name}</strong>
-        <em>{asset.symbol}</em>
-      </span>
-      <span>{formatKrw(asset.value_krw)}</span>
-      <span>{formatPercent(asset.weight_percent)}</span>
-      <span className={asset.profit_loss_rate_percent === null ? "" : asset.profit_loss_rate_percent >= 0 ? "positive-text" : "negative-text"}>{asset.profit_loss_rate_percent === null ? "-" : formatPercent(asset.profit_loss_rate_percent)}</span>
-      <span>{asset.price_source}</span>
-    </div>
-  );
+function TrendValue({ value, suffix }: { value: number | null; suffix: string }) {
+  return <b className={tone(value) + "-text"}>{value === null ? "-" : `${signed(Math.round(value))}${suffix}`}</b>;
 }
 
-function providerLabel(payload: DashboardPayload): string {
-  if (!payload.provider_status.length) {
-    return "status unknown";
-  }
-  return payload.provider_status.map((item) => `${item.provider}${item.used_fallback ? " fallback" : " live"}`).join(" / ");
+function tone(value: number | null): "positive" | "negative" | "neutral" {
+  if (value === null || value === 0) return "neutral";
+  return value > 0 ? "positive" : "negative";
 }
 
-function impactClass(score: number): string {
-  if (score > 0) {
-    return "impact positive";
-  }
-  if (score < 0) {
-    return "impact negative";
-  }
-  return "impact";
-}
-
-function percentage(value: number, total: number): number {
-  return total <= 0 ? 0 : Math.max(0, Math.min(100, (value / total) * 100));
+function signed(value: number): string {
+  return value > 0 ? `+${value}` : String(value);
 }
 
 function formatKrw(value: number): string {
   return `${Math.round(value).toLocaleString("ko-KR")}원`;
 }
 
-function formatSignedKrw(value: number): string {
-  const prefix = value > 0 ? "+" : "";
-  return `${prefix}${formatKrw(value)}`;
+function formatSignedKrw(value: number | null): string {
+  return value === null ? "-" : `${value > 0 ? "+" : ""}${formatKrw(value)}`;
 }
 
-function formatPercent(value: number | null): string {
-  if (value === null || Number.isNaN(value)) {
-    return "-";
-  }
-  const prefix = value > 0 ? "+" : "";
-  return `${prefix}${value.toFixed(2)}%`;
+function formatPercent(value: number | null, signedValue = true): string {
+  if (value === null || Number.isNaN(value)) return "-";
+  return `${signedValue && value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatPercentagePoint(value: number): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%p`;
 }
 
 function formatDate(value: string | null): string {
-  if (!value) {
-    return "no data";
-  }
-  return new Intl.DateTimeFormat("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+  if (!value) return "확인 불가";
+  return new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function statusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    actual: "실제 데이터",
+    estimated: "추정 데이터",
+    stale: "갱신 필요",
+    fallback: "대체값 사용",
+    confirmed: "확정",
+    provisional: "잠정",
+    insufficient_data: "데이터 부족",
+  };
+  return labels[value] ?? value;
+}
+
+function clamp(value: number): number {
+  return Math.max(0, Math.min(100, value));
 }

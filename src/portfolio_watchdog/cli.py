@@ -100,7 +100,11 @@ def main() -> None:
     elif args.command in {"sync-ledger", "add-cash-flow", "performance-summary"}:
         try:
             if args.command == "sync-ledger":
-                result = app.sync_ledger()
+                result = (
+                    app.sync_ledger(sync_dashboard=True)
+                    if args.sync_dashboard
+                    else app.sync_ledger()
+                )
             elif args.command == "performance-summary":
                 result = app.performance_summary()
             else:
