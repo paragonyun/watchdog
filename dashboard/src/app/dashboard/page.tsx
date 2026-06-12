@@ -1,3 +1,10 @@
+import {
+  Brand,
+  DesktopSideNavigation,
+  DesktopTopNavigation,
+  MobileBottomNavigation,
+  MobileHeader,
+} from "@/components/app-navigation";
 import { requireSession } from "@/lib/auth";
 import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
 import { formatDashboardDate } from "@/lib/format-date";
@@ -6,17 +13,6 @@ import { getLatestDashboardPayloads } from "@/lib/storage";
 import { logoutAction } from "../login/actions";
 
 export const dynamic = "force-dynamic";
-
-const topNavigation = ["대시보드", "포트폴리오", "분석", "리스크", "투자 의견", "리포트", "설정"];
-const sideNavigation = [
-  ["⌂", "홈"],
-  ["◷", "모니터링"],
-  ["▣", "포트폴리오"],
-  ["◇", "제안"],
-  ["▤", "리서치"],
-  ["○", "알림"],
-  ["⚙", "설정"],
-];
 
 export default async function DashboardPage() {
   await requireSession();
@@ -34,8 +30,8 @@ function DashboardHome({ view }: { view: DashboardView }) {
 
   return (
     <div className="app-frame">
-      <DesktopTopNavigation />
-      <DesktopSideNavigation />
+      <DesktopTopNavigation active="dashboard" />
+      <DesktopSideNavigation active="dashboard" />
 
       <main className="dashboard-main">
         <MobileHeader />
@@ -103,61 +99,7 @@ function DashboardHome({ view }: { view: DashboardView }) {
         </footer>
       </main>
 
-      <MobileBottomNavigation />
-    </div>
-  );
-}
-
-function DesktopTopNavigation() {
-  return (
-    <header className="desktop-topnav">
-      <Brand />
-      <nav aria-label="주요 메뉴">
-        {topNavigation.map((item, index) => (
-          <span className={index === 0 ? "active" : ""} key={item}>
-            {item}
-          </span>
-        ))}
-      </nav>
-      <div className="top-actions">
-        <span className="icon-action" title="검색">⌕</span>
-        <span className="icon-action notification" title="알림">○</span>
-        <span className="profile-mark">JS</span>
-      </div>
-    </header>
-  );
-}
-
-function DesktopSideNavigation() {
-  return (
-    <aside className="desktop-sidenav" aria-label="보조 메뉴">
-      {sideNavigation.map(([icon, label], index) => (
-        <span className={index === 0 ? "active" : ""} key={label}>
-          <b>{icon}</b>
-          <small>{label}</small>
-        </span>
-      ))}
-    </aside>
-  );
-}
-
-function MobileHeader() {
-  return (
-    <header className="mobile-header">
-      <Brand />
-      <div>
-        <span className="icon-action" title="알림">○</span>
-        <span className="icon-action" title="메뉴">☰</span>
-      </div>
-    </header>
-  );
-}
-
-function Brand() {
-  return (
-    <div className="brand">
-      <span className="brand-shield">W</span>
-      <strong>PORTFOLIO<br />WATCHDOG</strong>
+      <MobileBottomNavigation active="dashboard" />
     </div>
   );
 }
@@ -364,16 +306,6 @@ function PanelHeading({ title, meta }: { title: string; meta: string }) {
 
 function EmptyState({ text }: { text: string }) {
   return <div className="empty-state"><span>－</span><p>{text}</p></div>;
-}
-
-function MobileBottomNavigation() {
-  return (
-    <nav className="mobile-bottom-nav" aria-label="모바일 메뉴">
-      {sideNavigation.slice(0, 5).map(([icon, label], index) => (
-        <span className={index === 0 ? "active" : ""} key={label}><b>{icon}</b><small>{label}</small></span>
-      ))}
-    </nav>
-  );
 }
 
 function EmptyDashboardPage() {
