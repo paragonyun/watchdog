@@ -1,5 +1,6 @@
 import { requireSession } from "@/lib/auth";
 import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
+import { formatDashboardDate } from "@/lib/format-date";
 import { getLatestDashboardPayloads } from "@/lib/storage";
 
 import { logoutAction } from "../login/actions";
@@ -419,8 +420,7 @@ function formatPercentagePoint(value: number): string {
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return "확인 불가";
-  return new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return formatDashboardDate(value);
 }
 
 function statusLabel(value: string): string {
