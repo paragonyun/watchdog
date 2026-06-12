@@ -58,4 +58,21 @@ SCHEMA_STATEMENTS = (
         PRIMARY KEY(provider, stream)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS target_allocation_versions (
+        id INTEGER PRIMARY KEY,
+        effective_from TEXT UNIQUE NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS target_allocation_items (
+        version_id INTEGER NOT NULL,
+        asset_group TEXT NOT NULL,
+        target_weight REAL NOT NULL,
+        benchmark_symbol TEXT NOT NULL,
+        PRIMARY KEY(version_id, asset_group),
+        FOREIGN KEY(version_id) REFERENCES target_allocation_versions(id) ON DELETE CASCADE
+    )
+    """,
 )

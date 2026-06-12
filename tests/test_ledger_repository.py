@@ -1,6 +1,6 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from threading import Barrier
 
 import pytest
@@ -9,9 +9,14 @@ from portfolio_watchdog.config import LedgerConfig, load_config
 from portfolio_watchdog.ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
 from portfolio_watchdog.ledger.repository import BUSY_TIMEOUT_MS, LedgerRepository
 from portfolio_watchdog.ledger.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
+from portfolio_watchdog.performance.benchmark import BenchmarkWeight
 
 
 UTC = timezone.utc
+
+
+class CustomDate(date):
+    pass
 
 
 def _utc(value: datetime) -> datetime:
@@ -47,6 +52,17 @@ def _event(**overrides) -> LedgerEvent:
     return LedgerEvent(**values)
 
 
+def _benchmark_weight(**overrides) -> BenchmarkWeight:
+    values = {
+        "effective_from": date(2026, 1, 1),
+        "asset_group": "equity",
+        "weight": 1.0,
+        "benchmark_symbol": "SPY",
+    }
+    values.update(overrides)
+    return BenchmarkWeight(**values)
+
+
 def test_ledger_repository_initializes_schema_and_connection_settings(tmp_path) -> None:
     path = tmp_path / "nested" / "watchdog.db"
     repository = LedgerRepository(path)
@@ -68,6 +84,8 @@ def test_ledger_repository_initializes_schema_and_connection_settings(tmp_path) 
         "account_snapshots",
         "asset_snapshots",
         "collection_cursors",
+        "target_allocation_versions",
+        "target_allocation_items",
     } <= tables
 
     with repository._connect() as connection:
@@ -78,6 +96,185 @@ def test_ledger_repository_initializes_schema_and_connection_settings(tmp_path) 
             connection.execute(
                 "INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,)
             )
+
+
+def test_target_allocation_items_reference_versions_with_delete_cascade(tmp_path) -> None:
+    path = tmp_path / "watchdog.db"
+    LedgerRepository(path)
+
+    with sqlite3.connect(path) as connection:
+        foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list(target_allocation_items)"
+        ).fetchall()
+
+    assert any(
+        row[2] == "target_allocation_versions"
+        and row[3] == "version_id"
+        and row[4] == "id"
+        and row[6].upper() == "CASCADE"
+        for row in foreign_keys
+    )
+
+
+def test_existing_database_gets_additive_target_allocation_tables(tmp_path) -> None:
+    path = tmp_path / "watchdog.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE schema_version(version INTEGER NOT NULL)")
+        connection.execute(
+            "CREATE UNIQUE INDEX schema_version_single_row ON schema_version ((1))"
+        )
+        connection.execute(
+            "INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,)
+        )
+        connection.execute("CREATE TABLE legacy_marker(value TEXT NOT NULL)")
+        connection.execute("INSERT INTO legacy_marker(value) VALUES ('preserved')")
+
+    LedgerRepository(path)
+
+    with sqlite3.connect(path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        marker = connection.execute("SELECT value FROM legacy_marker").fetchone()
+        version = connection.execute("SELECT version FROM schema_version").fetchone()
+
+    assert {"target_allocation_versions", "target_allocation_items"} <= tables
+    assert marker == ("preserved",)
+    assert version == (SCHEMA_VERSION,)
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        [],
+        [_benchmark_weight(weight=0.9)],
+        [_benchmark_weight(weight=-1.0)],
+        [_benchmark_weight(weight=float("nan"))],
+        [
+            _benchmark_weight(weight=0.5),
+            _benchmark_weight(
+                effective_from=date(2026, 2, 1),
+                asset_group="bond",
+                weight=0.5,
+                benchmark_symbol="AGG",
+            ),
+        ],
+        [
+            _benchmark_weight(weight=0.5),
+            _benchmark_weight(weight=0.5, benchmark_symbol="QQQ"),
+        ],
+    ],
+)
+def test_save_target_allocation_rejects_invalid_weight_version(tmp_path, weights) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+
+    with pytest.raises(ValueError):
+        repository.save_target_allocation(weights)
+
+
+@pytest.mark.parametrize(
+    "weight",
+    [
+        _benchmark_weight(effective_from=datetime(2026, 1, 1)),
+        _benchmark_weight(effective_from=CustomDate(2026, 1, 1)),
+        _benchmark_weight(asset_group=""),
+        _benchmark_weight(asset_group=1),
+        _benchmark_weight(benchmark_symbol=""),
+        _benchmark_weight(benchmark_symbol=1),
+    ],
+)
+def test_save_target_allocation_rejects_invalid_version_identifiers(
+    tmp_path, weight
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+
+    with pytest.raises(ValueError):
+        repository.save_target_allocation([weight])
+
+
+@pytest.mark.parametrize(
+    "effective_on", [datetime(2026, 1, 1), CustomDate(2026, 1, 1)]
+)
+def test_get_target_allocation_rejects_non_exact_date_effective_on(
+    tmp_path, effective_on
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+
+    with pytest.raises(ValueError, match="effective_on"):
+        repository.get_target_allocation(effective_on)
+
+
+def test_save_target_allocation_is_atomic_when_item_insert_fails(tmp_path) -> None:
+    path = tmp_path / "watchdog.db"
+    repository = LedgerRepository(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_target_allocation_item
+            BEFORE INSERT ON target_allocation_items
+            BEGIN
+                SELECT RAISE(ABORT, 'forced item failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced item failure"):
+        repository.save_target_allocation([_benchmark_weight()])
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM target_allocation_versions"
+        ).fetchone() == (0,)
+
+
+def test_save_target_allocation_is_idempotent_and_rejects_conflict(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    weights = [
+        _benchmark_weight(asset_group="equity", weight=0.6, benchmark_symbol="SPY"),
+        _benchmark_weight(asset_group="bond", weight=0.4, benchmark_symbol="AGG"),
+    ]
+
+    assert repository.save_target_allocation(weights) is True
+    assert repository.save_target_allocation(list(reversed(weights))) is False
+
+    conflict = [
+        _benchmark_weight(asset_group="equity", weight=0.6, benchmark_symbol="QQQ"),
+        _benchmark_weight(asset_group="bond", weight=0.4, benchmark_symbol="AGG"),
+    ]
+    with pytest.raises(ValueError, match="conflict"):
+        repository.save_target_allocation(conflict)
+
+    assert repository.get_target_allocation(date(2026, 1, 1)) == sorted(
+        weights, key=lambda weight: weight.asset_group
+    )
+
+
+def test_get_target_allocation_returns_latest_effective_version_sorted_by_group(
+    tmp_path,
+) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    january = [
+        _benchmark_weight(asset_group="equity", weight=0.6, benchmark_symbol="SPY"),
+        _benchmark_weight(asset_group="bond", weight=0.4, benchmark_symbol="AGG"),
+    ]
+    march = [
+        _benchmark_weight(
+            effective_from=date(2026, 3, 1),
+            asset_group="equity",
+            benchmark_symbol="QQQ",
+        )
+    ]
+    repository.save_target_allocation(january)
+    repository.save_target_allocation(march)
+
+    assert repository.get_target_allocation(date(2025, 12, 31)) == []
+    assert repository.get_target_allocation(date(2026, 2, 28)) == sorted(
+        january, key=lambda weight: weight.asset_group
+    )
+    assert repository.get_target_allocation(date(2026, 3, 1)) == march
 
 
 def test_connection_sets_busy_timeout_before_journal_mode(tmp_path, monkeypatch) -> None:

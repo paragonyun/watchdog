@@ -1,13 +1,15 @@
+import math
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Iterator, Optional, Sequence, Union
 
 from portfolio_watchdog.ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
 from portfolio_watchdog.ledger.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
+from portfolio_watchdog.performance.benchmark import BenchmarkWeight
 
 
 BUSY_TIMEOUT_MS = 5000
@@ -291,6 +293,89 @@ class LedgerRepository:
             connection.execute("BEGIN IMMEDIATE")
             _set_cursor(connection, provider, stream, cursor_value, updated_at)
 
+    def save_target_allocation(self, weights: Sequence[BenchmarkWeight]) -> bool:
+        validated = _validate_target_allocation(weights)
+        effective_from = validated[0].effective_from.isoformat()
+        requested_items = [
+            (weight.asset_group, weight.weight, weight.benchmark_symbol)
+            for weight in validated
+        ]
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT id FROM target_allocation_versions WHERE effective_from = ?",
+                (effective_from,),
+            ).fetchone()
+            if existing is not None:
+                stored_items = connection.execute(
+                    """
+                    SELECT asset_group, target_weight, benchmark_symbol
+                    FROM target_allocation_items
+                    WHERE version_id = ?
+                    ORDER BY asset_group
+                    """,
+                    (existing["id"],),
+                ).fetchall()
+                if [tuple(row) for row in stored_items] == requested_items:
+                    return False
+                raise ValueError("target allocation version conflict")
+
+            cursor = connection.execute(
+                """
+                INSERT INTO target_allocation_versions(effective_from, created_at)
+                VALUES (?, ?)
+                """,
+                (effective_from, _utc_iso(datetime.now(timezone.utc))),
+            )
+            connection.executemany(
+                """
+                INSERT INTO target_allocation_items(
+                    version_id, asset_group, target_weight, benchmark_symbol
+                ) VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (cursor.lastrowid, asset_group, target_weight, benchmark_symbol)
+                    for asset_group, target_weight, benchmark_symbol in requested_items
+                ],
+            )
+        return True
+
+    def get_target_allocation(self, effective_on: date) -> list[BenchmarkWeight]:
+        if type(effective_on) is not date:
+            raise ValueError("effective_on must be a date")
+        with self._connect() as connection:
+            version = connection.execute(
+                """
+                SELECT id, effective_from
+                FROM target_allocation_versions
+                WHERE effective_from <= ?
+                ORDER BY effective_from DESC
+                LIMIT 1
+                """,
+                (effective_on.isoformat(),),
+            ).fetchone()
+            if version is None:
+                return []
+            rows = connection.execute(
+                """
+                SELECT asset_group, target_weight, benchmark_symbol
+                FROM target_allocation_items
+                WHERE version_id = ?
+                ORDER BY asset_group
+                """,
+                (version["id"],),
+            ).fetchall()
+        effective_from = date.fromisoformat(version["effective_from"])
+        return [
+            BenchmarkWeight(
+                effective_from=effective_from,
+                asset_group=row["asset_group"],
+                weight=row["target_weight"],
+                benchmark_symbol=row["benchmark_symbol"],
+            )
+            for row in rows
+        ]
+
     def _initialize_schema(self) -> None:
         for attempt in range(BUSY_RETRY_ATTEMPTS):
             try:
@@ -336,6 +421,39 @@ def _utc_iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _validate_target_allocation(
+    weights: Sequence[BenchmarkWeight],
+) -> list[BenchmarkWeight]:
+    validated = list(weights)
+    if not validated:
+        raise ValueError("weights must not be empty")
+
+    effective_from = validated[0].effective_from
+    asset_groups = set()
+    for weight in validated:
+        if type(weight.effective_from) is not date:
+            raise ValueError("effective_from must be a date")
+        if not isinstance(weight.asset_group, str) or not weight.asset_group:
+            raise ValueError("asset_group must be a non-empty string")
+        if not isinstance(weight.benchmark_symbol, str) or not weight.benchmark_symbol:
+            raise ValueError("benchmark_symbol must be a non-empty string")
+        try:
+            finite = math.isfinite(weight.weight)
+        except TypeError:
+            finite = False
+        if not finite or weight.weight < 0:
+            raise ValueError("weight must be finite and nonnegative")
+        if weight.effective_from != effective_from:
+            raise ValueError("weights must have the same effective_from")
+        if weight.asset_group in asset_groups:
+            raise ValueError(f"duplicate asset_group: {weight.asset_group}")
+        asset_groups.add(weight.asset_group)
+
+    if abs(math.fsum(weight.weight for weight in validated) - 1.0) > 0.0001:
+        raise ValueError("weight sum must be within 0.0001 of 1.0")
+    return sorted(validated, key=lambda weight: weight.asset_group)
 
 
 def _upsert_event(connection: sqlite3.Connection, event: LedgerEvent) -> bool:
