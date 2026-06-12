@@ -23,9 +23,6 @@ export function resolveDashboardPayload(value: unknown, options: { allowSample: 
 
 export async function getLatestDashboardData(): Promise<DashboardDataResult> {
   const allowSample = process.env.NODE_ENV !== "production";
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return resolveDashboardPayload(null, { allowSample });
-  }
   try {
     const { get } = await import("@vercel/blob");
     const file = await get(BLOB_KEY, { access: "private", useCache: false });
@@ -34,7 +31,8 @@ export async function getLatestDashboardData(): Promise<DashboardDataResult> {
     }
     const payload = JSON.parse(await new Response(file.stream).text()) as unknown;
     return resolveDashboardPayload(payload, { allowSample });
-  } catch {
+  } catch (error) {
+    console.error("Failed to load dashboard blob:", error instanceof Error ? error.message : "unknown error");
     return resolveDashboardPayload(null, { allowSample });
   }
 }
