@@ -52,13 +52,15 @@ def apply_runtime_base_paths(config: AppConfig, settings_root: Path) -> AppConfi
     config.snapshot.path = _absolute_if_relative(config.snapshot.path, settings_root)
     config.snapshot.history_path = _absolute_if_relative(config.snapshot.history_path, settings_root)
     config.news.snapshot_path = _absolute_if_relative(config.news.snapshot_path, settings_root)
+    config.ledger.path = _absolute_if_relative(config.ledger.path, settings_root)
     return config
 
 
 def apply_env_base_paths(env: dict[str, str], settings_root: Path) -> dict[str, str]:
-    value = env.get("KIS_TOKEN_CACHE_PATH")
-    if value:
-        env["KIS_TOKEN_CACHE_PATH"] = _absolute_if_relative(value, settings_root)
+    for key in ("KIS_TOKEN_CACHE_PATH", "WATCHDOG_LEDGER_PATH"):
+        value = env.get(key)
+        if value:
+            env[key] = _absolute_if_relative(value, settings_root)
     return env
 
 

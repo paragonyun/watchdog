@@ -221,6 +221,10 @@ class LedgerRepository:
                     """,
                     (*account_values[2:], *account_values[:2]),
                 )
+            connection.execute(
+                "DELETE FROM asset_snapshots WHERE provider = ? AND captured_at = ?",
+                account_values[:2],
+            )
             for asset in assets:
                 asset_values = (
                     asset.provider,

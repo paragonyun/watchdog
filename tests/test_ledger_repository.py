@@ -584,6 +584,25 @@ def test_asset_snapshot_upsert_and_list(tmp_path) -> None:
     ]
 
 
+def test_upsert_snapshot_replaces_asset_set_at_same_timestamp(tmp_path) -> None:
+    repository = LedgerRepository(tmp_path / "watchdog.db")
+    captured_at = datetime(2026, 6, 6, 8, 0)
+    account = AccountSnapshot("portfolio", captured_at, 100_000, "actual")
+    btc = AssetSnapshot(
+        "portfolio", captured_at, "BTC", "coin", 60_000, 1, 60_000, 50_000, "actual"
+    )
+    eth = AssetSnapshot(
+        "portfolio", captured_at, "ETH", "coin", 40_000, 1, 40_000, 30_000, "actual"
+    )
+
+    repository.upsert_snapshot(account, [btc, eth])
+    repository.upsert_snapshot(account, [btc])
+
+    assert repository.list_asset_snapshots(captured_at=captured_at) == [
+        AssetSnapshot(**{**btc.__dict__, "captured_at": _utc(captured_at)})
+    ]
+
+
 def test_concurrent_asset_snapshot_upsert_returns_true_exactly_once(tmp_path) -> None:
     repository = LedgerRepository(tmp_path / "watchdog.db")
     snapshot = AssetSnapshot(
