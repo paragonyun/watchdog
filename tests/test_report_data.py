@@ -64,3 +64,73 @@ def tmp_path_like(name: str):
     from pathlib import Path
 
     return Path(name)
+
+
+def test_report_payload_optionally_includes_performance_summary() -> None:
+    portfolio = PortfolioEvaluation(assets=[], total_value_krw=0)
+    performance = {"cumulative_twr_pct": 10.0, "status": "confirmed"}
+
+    with_performance = build_report_payload(
+        "portfolio",
+        portfolio,
+        {},
+        [],
+        generated_at=datetime(2026, 6, 6, 8, 0),
+        performance_summary=performance,
+    )
+    without_performance = build_report_payload(
+        "portfolio",
+        portfolio,
+        {},
+        [],
+        generated_at=datetime(2026, 6, 6, 8, 0),
+    )
+
+    assert with_performance["performance"] == performance
+    assert "performance" not in without_performance
+
+
+def test_report_payload_projects_performance_block_without_aliasing() -> None:
+    portfolio = PortfolioEvaluation(assets=[], total_value_krw=0)
+    summary = {
+        "performance": {"cumulative_twr_pct": 10.0, "status": "confirmed"},
+        "assets": [{"quantity": 1}],
+        "provider_status": [{"error": "private"}],
+    }
+
+    payload = build_report_payload(
+        "portfolio",
+        portfolio,
+        {},
+        [],
+        generated_at=datetime(2026, 6, 6, 8, 0),
+        performance_summary=summary,
+    )
+    summary["performance"]["status"] = "provisional"
+
+    assert payload["performance"] == {
+        "cumulative_twr_pct": 10.0,
+        "status": "confirmed",
+    }
+    assert "assets" not in payload["performance"]
+
+
+def test_report_payload_rejects_nested_or_invalid_performance_values() -> None:
+    portfolio = PortfolioEvaluation(assets=[], total_value_krw=0)
+
+    with pytest.raises(ValueError, match="performance status"):
+        build_report_payload(
+            "portfolio",
+            portfolio,
+            {},
+            [],
+            performance_summary={"status": {"error": "private"}},
+        )
+    with pytest.raises(ValueError, match="performance field"):
+        build_report_payload(
+            "portfolio",
+            portfolio,
+            {},
+            [],
+            performance_summary={"cumulative_twr_pct": float("nan")},
+        )
