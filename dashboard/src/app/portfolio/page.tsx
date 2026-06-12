@@ -115,7 +115,7 @@ function PortfolioScreen({ view }: { view: DashboardView }) {
                       <Metric label="포트폴리오 비중" value={formatPercent(asset.weightPercent, false)} />
                       <Metric label="목표 편차" value={formatPercentagePoint(asset.targetDiffPercentagePoints)} tone={deviationTone(asset.targetDiffPercentagePoints)} />
                       <Metric label="누계 수익률" value={formatPercent(asset.profitLossRatePercent)} tone={tone(asset.profitLossRatePercent)} />
-                      <Metric label="데이터 출처" value={asset.priceSource ?? providerForAsset(asset.assetType)} />
+                      <Metric label="데이터 출처" value={providerForAsset(asset.assetType, asset.priceSource, view)} />
                     </article>
                   ))}
                 </div>
@@ -176,10 +176,12 @@ function deviationTone(value: number | null): string {
   return value === null || value === 0 ? "neutral-text" : "warning-text";
 }
 
-function providerForAsset(assetType: string): string {
-  if (assetType === "isa") return "kis";
-  if (assetType === "coin") return "upbit";
-  return "manual";
+function providerForAsset(assetType: string, legacySource: string | null, view: DashboardView): string {
+  const providerName = assetType === "isa" ? "kis" : assetType === "coin" ? "upbit" : null;
+  if (!providerName) return "수동";
+  const provider = view.providers.find((item) => item.provider.toLowerCase() === providerName);
+  if (provider) return provider.usedFallback ? `${providerName.toUpperCase()} 대체값` : providerName.toUpperCase();
+  return legacySource ?? providerName.toUpperCase();
 }
 
 function clamp(value: number): number {
