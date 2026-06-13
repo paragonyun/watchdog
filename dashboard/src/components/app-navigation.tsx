@@ -1,13 +1,13 @@
 import Link from "next/link";
 
-type ActivePage = "dashboard" | "portfolio" | "risk";
+type ActivePage = "dashboard" | "portfolio" | "risk" | "opinion";
 
 const topNavigation = [
   { label: "대시보드", href: "/dashboard", key: "dashboard" },
   { label: "포트폴리오", href: "/portfolio", key: "portfolio" },
   { label: "분석" },
   { label: "리스크", href: "/risk", key: "risk" },
-  { label: "투자 의견" },
+  { label: "투자 의견", href: "/opinion", key: "opinion" },
   { label: "리포트" },
   { label: "설정" },
 ] as const;
@@ -16,7 +16,7 @@ const sideNavigation = [
   { icon: "⌂", label: "홈", href: "/dashboard", key: "dashboard" },
   { icon: "◷", label: "리스크", href: "/risk", key: "risk" },
   { icon: "▣", label: "포트폴리오", href: "/portfolio", key: "portfolio" },
-  { icon: "◇", label: "제안" },
+  { icon: "◇", label: "의견", href: "/opinion", key: "opinion" },
   { icon: "▤", label: "리서치" },
   { icon: "○", label: "알림" },
   { icon: "⚙", label: "설정" },
