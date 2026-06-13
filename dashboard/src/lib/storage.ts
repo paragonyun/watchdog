@@ -7,9 +7,11 @@ import {
   type DashboardPayload,
   type DashboardPayloadV2,
 } from "./dashboard-payload";
+import { validateNewsRiskPayload, type NewsRiskPayload } from "./news-risk-payload";
 
 const BLOB_KEY = "dashboard/latest.json";
 const V2_BLOB_KEY = "dashboard/v2-latest.json";
+export const NEWS_RISK_BLOB_KEY = "dashboard/news-risk-latest.json";
 
 export type DashboardDataSource = "blob" | "sample" | "empty";
 
@@ -72,6 +74,21 @@ export function blobKeyForPayload(payload: Pick<AnyDashboardPayload, "schema_ver
 export async function saveLatestDashboardPayload(payload: AnyDashboardPayload): Promise<void> {
   const { put } = await import("@vercel/blob");
   await put(blobKeyForPayload(payload), JSON.stringify(payload), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
+export async function getLatestNewsRiskPayload(): Promise<NewsRiskPayload | null> {
+  const value = await readBlobPayload(NEWS_RISK_BLOB_KEY);
+  return validateNewsRiskPayload(value) ? value : null;
+}
+
+export async function saveLatestNewsRiskPayload(payload: NewsRiskPayload): Promise<void> {
+  const { put } = await import("@vercel/blob");
+  await put(NEWS_RISK_BLOB_KEY, JSON.stringify(payload), {
     access: "private",
     addRandomSuffix: false,
     allowOverwrite: true,

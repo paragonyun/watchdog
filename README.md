@@ -102,6 +102,21 @@ WATCHDOG_UPLOAD_TOKEN=위와 같은 업로드 토큰
 node -e "console.log(require('crypto').createHash('sha256').update('원하는비밀번호').digest('hex'))"
 ```
 
+## 뉴스 기반 잠재 리스크
+
+리스크 화면은 기존 수치 기반 위험과 별도로 최근 72시간 뉴스에서 발견한 잠재 리스크를 표시합니다. 자동 RSS 분석은 OpenAI API를 호출하지 않으며 별도 API 비용이 발생하지 않습니다. Codex 심층 분석은 정기 리포트 작성 또는 사용자가 요청한 시점에 별도 결과 파일을 생성해 병합합니다.
+
+```powershell
+python -m portfolio_watchdog collect-news-risks --sync-dashboard
+python -m portfolio_watchdog merge-news-risks --path snapshots/codex_news_risk.json --sync-dashboard
+python -m portfolio_watchdog sync-news-risks --path snapshots/news_risk_latest.json
+python -m portfolio_watchdog install-schedule
+```
+
+뉴스 RSS 수집과 자산 API 동기화는 독립적으로 실패 처리됩니다. 뉴스 수집 실패가 자산 현황 표시를 막지 않고, 자산 API 실패가 기존 뉴스 리스크 파일을 삭제하지 않습니다. 클라우드에는 요약된 리스크만 Private Blob `dashboard/news-risk-latest.json`에 저장하며 뉴스 원문, 수량, 평단, 계좌 식별자, API 키는 업로드하지 않습니다.
+
+상세 운영·복구 절차는 [뉴스 리스크 운영 Runbook](docs/operations/news-risk-runbook.md)을 참고합니다. 뉴스 리스크는 확인 우선순위를 설명하는 관찰 항목이며 매수·매도 추천이 아닙니다.
+
 ## 리포트 정확성 원칙
 
 - 현재 자산 현황은 실행 시점 Upbit/KIS/가격 API 평가값을 기준으로 합니다.

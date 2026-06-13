@@ -17,6 +17,7 @@ def install_windows_schedule(runner: Runner | None = None) -> None:
     workdir = get_executable_root()
     tasks: List[TaskSpec] = [
         ("PortfolioWatchdogNewsHourly", "check-news", "HOURLY", "00:00", None),
+        ("PortfolioWatchdogNewsRiskHourly", "collect-news-risks --sync-dashboard", "HOURLY", "00:10", None),
         ("PortfolioWatchdogLedger0800", "sync-ledger --sync-dashboard", "DAILY", "08:00", None),
         ("PortfolioWatchdogLedger1200", "sync-ledger --sync-dashboard", "DAILY", "12:00", None),
         ("PortfolioWatchdogLedger1800", "sync-ledger --sync-dashboard", "DAILY", "18:00", None),
