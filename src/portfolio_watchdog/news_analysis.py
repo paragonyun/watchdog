@@ -37,6 +37,18 @@ def default_news_queries() -> List[str]:
     ]
 
 
+def risk_news_queries() -> List[str]:
+    return default_news_queries() + [
+        "금리 국채 중앙은행 긴축",
+        "물가 CPI 인플레이션",
+        "환율 달러",
+        "경기둔화 침체 고용",
+        "금융 규제 가상자산 규제 거래제한",
+        "지정학 제재 무역갈등",
+        "유동성 자금유출 신용위험",
+    ]
+
+
 def analyze_news_items(items: Sequence[NewsItem], assets: Sequence[AssetConfig]) -> List[NewsItem]:
     configured_symbols = {asset.symbol for asset in assets}
     analyzed: List[NewsItem] = []
