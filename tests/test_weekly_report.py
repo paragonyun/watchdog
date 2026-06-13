@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 import pytest
 
 import portfolio_watchdog.app as app_module
+import portfolio_watchdog.providers.rss_news_provider as rss_module
 from portfolio_watchdog.app import PortfolioWatchdogApp
 from portfolio_watchdog.config import AlertConfig, AppConfig, AssetConfig, NewsConfig, PriceProviderConfig, SnapshotConfig, TelegramConfig
 from portfolio_watchdog.models import AssetEvaluation, PortfolioEvaluation
+from portfolio_watchdog.news_risk import build_news_risk_payload, save_news_risk_payload
 from portfolio_watchdog.providers.rss_news_provider import RssNewsProvider
 from portfolio_watchdog.report_data import ReportArtifact
 from portfolio_watchdog.weekly_report import build_weekly_report_source, build_weekly_report_telegram_summary
@@ -157,6 +159,118 @@ def test_app_can_disable_llm_news_for_codex_automation(tmp_path) -> None:
     watchdog = PortfolioWatchdogApp(config, env={"OPENAI_API_KEY": "secret"}, use_llm_news=False)
 
     assert isinstance(watchdog.news_provider, RssNewsProvider)
+
+
+def test_rss_provider_reports_when_all_queries_fail(monkeypatch) -> None:
+    provider = RssNewsProvider([], ["query-one", "query-two"])
+    monkeypatch.setattr(rss_module.requests, "get", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    assert provider.get_market_summary() == []
+    assert provider.all_queries_failed is True
+
+
+def test_collect_news_risks_saves_and_optionally_uploads(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(
+        _app_config(tmp_path),
+        env={
+            "WATCHDOG_DASHBOARD_UPLOAD_URL": "https://example.com/api/upload",
+            "WATCHDOG_UPLOAD_TOKEN": "token",
+        },
+    )
+    output = tmp_path / "news_risk_latest.json"
+    monkeypatch.setattr(watchdog, "_evaluate_current_portfolio", lambda: ([], PortfolioEvaluation([], 0)))
+    monkeypatch.setattr(
+        app_module,
+        "RssNewsProvider",
+        lambda *args, **kwargs: type("Provider", (), {"get_market_summary": lambda self: []})(),
+    )
+    uploads = []
+    monkeypatch.setattr(
+        app_module,
+        "upload_dashboard_payload",
+        lambda payload, endpoint, token: uploads.append((payload, endpoint, token)) or {"ok": True},
+    )
+
+    payload = watchdog.collect_news_risks(output, sync_dashboard=True)
+
+    assert output.exists()
+    assert payload["schema_version"] == "news_risk_payload_v1"
+    assert uploads == [(payload, "https://example.com/api/upload", "token")]
+
+
+def test_collect_news_risks_keeps_existing_payload_as_delayed_on_rss_failure(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
+    output = tmp_path / "news_risk_latest.json"
+    existing = build_news_risk_payload([], PortfolioEvaluation([], 0))
+    save_news_risk_payload(existing, output)
+    monkeypatch.setattr(watchdog, "_evaluate_current_portfolio", lambda: ([], PortfolioEvaluation([], 0)))
+
+    class FailingProvider:
+        all_queries_failed = True
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_market_summary(self):
+            return []
+
+    monkeypatch.setattr(app_module, "RssNewsProvider", FailingProvider)
+
+    payload = watchdog.collect_news_risks(output)
+
+    assert payload["status"] == "delayed"
+    assert output.exists()
+
+
+def test_collect_news_risks_does_not_hide_payload_build_errors(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
+    output = tmp_path / "news_risk_latest.json"
+    save_news_risk_payload(build_news_risk_payload([], PortfolioEvaluation([], 0)), output)
+    monkeypatch.setattr(watchdog, "_evaluate_current_portfolio", lambda: ([], PortfolioEvaluation([], 0)))
+    monkeypatch.setattr(
+        app_module,
+        "RssNewsProvider",
+        lambda *args, **kwargs: type("Provider", (), {"get_market_summary": lambda self: []})(),
+    )
+    monkeypatch.setattr(app_module, "build_news_risk_payload", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad payload")))
+
+    with pytest.raises(ValueError, match="bad payload"):
+        watchdog.collect_news_risks(output)
+
+
+def test_merge_and_sync_news_risks(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(
+        _app_config(tmp_path),
+        env={
+            "WATCHDOG_DASHBOARD_UPLOAD_URL": "https://example.com/api/upload",
+            "WATCHDOG_UPLOAD_TOKEN": "token",
+        },
+    )
+    watchdog.config.news.snapshot_path = str(tmp_path / "news_state.json")
+    base = tmp_path / "news_risk_latest.json"
+    output = tmp_path / "merged_news_risk.json"
+    codex = tmp_path / "codex.json"
+    save_news_risk_payload(build_news_risk_payload([], PortfolioEvaluation([], 0)), base)
+    codex.write_text(
+        '{"schema_version":"codex_news_risk_v1","generated_at":"2026-06-13T09:00:00+00:00","risks":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(watchdog, "_evaluate_current_portfolio", lambda: ([], PortfolioEvaluation([], 0)))
+    uploads = []
+    monkeypatch.setattr(
+        app_module,
+        "upload_dashboard_payload",
+        lambda payload, endpoint, token: uploads.append((payload, endpoint, token)) or {"ok": True},
+    )
+
+    merged = watchdog.merge_news_risks(codex, output, sync_dashboard=True)
+    synced = watchdog.sync_news_risks(output)
+
+    assert merged["schema_version"] == "news_risk_payload_v1"
+    assert synced["schema_version"] == "news_risk_payload_v1"
+    assert output.exists()
+    assert len(uploads) == 2
+    assert all(call[1:] == ("https://example.com/api/upload", "token") for call in uploads)
 
 
 def _app_config(tmp_path) -> AppConfig:

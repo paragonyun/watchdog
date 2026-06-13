@@ -17,7 +17,15 @@ from .ledger.reconciliation import reconcile_asset_quantities
 from .ledger.repository import LedgerRepository
 from .message_format import split_message
 from .models import ReconciliationResult
+from .news_analysis import risk_news_queries
 from .news_digest import write_hourly_codex_source
+from .news_risk import (
+    build_news_risk_payload,
+    load_json_object,
+    merge_codex_news_risks,
+    save_news_risk_payload,
+    validate_news_risk_payload,
+)
 from .notifiers.base import Notifier
 from .notifiers.console import ConsoleNotifier
 from .notifiers.telegram import TelegramNotifier
@@ -809,6 +817,68 @@ class PortfolioWatchdogApp:
         )
         logger.info("Dashboard synced: %s", result)
         return dashboard_payload
+
+    def collect_news_risks(self, output_path: Path | None = None, sync_dashboard: bool = False) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        target = Path(output_path) if output_path else self._news_risk_output_path()
+        _, portfolio = self._evaluate_current_portfolio()
+        provider = RssNewsProvider(self.config.assets, risk_news_queries(), 72, 60, 5)
+        try:
+            news_items = provider.get_market_summary()
+            if getattr(provider, "all_queries_failed", False):
+                raise RuntimeError("all news risk RSS queries failed")
+        except Exception:
+            if not target.exists():
+                raise
+            logger.exception("News risk RSS collection failed; preserving existing payload as delayed")
+            payload = load_json_object(target)
+            validate_news_risk_payload(payload)
+            payload["status"] = "delayed"
+            payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            payload = build_news_risk_payload(news_items, portfolio)
+        save_news_risk_payload(payload, target)
+        if sync_dashboard:
+            self._upload_news_risk_payload(payload)
+        logger.info("News risks collected: %s", target)
+        return payload
+
+    def merge_news_risks(
+        self,
+        codex_path: Path,
+        output_path: Path | None = None,
+        sync_dashboard: bool = False,
+    ) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        source = self._news_risk_output_path()
+        target = Path(output_path) if output_path else source
+        base_payload = load_json_object(source)
+        codex_payload = load_json_object(Path(codex_path))
+        _, portfolio = self._evaluate_current_portfolio()
+        payload = merge_codex_news_risks(base_payload, codex_payload, portfolio)
+        save_news_risk_payload(payload, target)
+        if sync_dashboard:
+            self._upload_news_risk_payload(payload)
+        logger.info("Codex news risks merged: %s", target)
+        return payload
+
+    def sync_news_risks(self, path: Path) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        payload = load_json_object(Path(path))
+        validate_news_risk_payload(payload)
+        self._upload_news_risk_payload(payload)
+        logger.info("News risks synced: %s", path)
+        return payload
+
+    def _news_risk_output_path(self) -> Path:
+        return Path(self.config.news.snapshot_path).parent / "news_risk_latest.json"
+
+    def _upload_news_risk_payload(self, payload: Dict[str, object]) -> None:
+        upload_dashboard_payload(
+            payload,
+            self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
+            self.env.get("WATCHDOG_UPLOAD_TOKEN"),
+        )
 
     def render_report_pdf(self, path: Path, output_path: Path | None = None) -> Path:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

@@ -23,8 +23,14 @@ class RssNewsProvider(NewsProvider):
         self.max_items = max_items
         self.max_items_per_query = max_items_per_query
         self.timeout_seconds = timeout_seconds
+        self.failed_query_count = 0
+
+    @property
+    def all_queries_failed(self) -> bool:
+        return bool(self.queries) and self.failed_query_count == len(self.queries)
 
     def get_market_summary(self) -> List[NewsItem]:
+        self.failed_query_count = 0
         raw_items: List[NewsItem] = []
         for query in self.queries:
             raw_items.extend(self._fetch_query(query))
@@ -41,6 +47,7 @@ class RssNewsProvider(NewsProvider):
             response.raise_for_status()
             return self._parse_rss(response.content)[: self.max_items_per_query]
         except Exception as exc:
+            self.failed_query_count += 1
             logger.warning("RSS news lookup failed for query %s: %s", query, exc)
             return []
 

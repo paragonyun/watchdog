@@ -17,8 +17,8 @@ def test_install_windows_schedule_updates_power_settings(monkeypatch, tmp_path) 
     create_calls = [call for call in calls if call[0] == "schtasks"]
     powershell_calls = [call for call in calls if call[0] == "powershell"]
 
-    assert len(create_calls) == 5
-    assert len(powershell_calls) == 5
+    assert len(create_calls) == 6
+    assert len(powershell_calls) == 6
     assert all(
         "StopIfGoingOnBatteries = $false" in call[-1] for call in powershell_calls
     )
@@ -27,6 +27,10 @@ def test_install_windows_schedule_updates_power_settings(monkeypatch, tmp_path) 
     news_call = next(call for call in create_calls if "PortfolioWatchdogNewsHourly" in call)
     assert "/ST" in news_call
     assert "00:00" in news_call
+
+    news_risk_call = next(call for call in create_calls if "PortfolioWatchdogNewsRiskHourly" in call)
+    assert "collect-news-risks --sync-dashboard" in " ".join(news_risk_call)
+    assert "00:10" in news_risk_call
 
     assert all("PortfolioWatchdogWeeklyReport" not in call for call in create_calls)
     assert all("PortfolioWatchdogReport0800" not in call for call in create_calls)
