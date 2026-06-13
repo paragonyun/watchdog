@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import copy
 import hashlib
+import ipaddress
+import json
+import math
+import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+from .cloud_contract import assert_cloud_safe
 from .models import NewsItem, PortfolioEvaluation
 
 
@@ -51,6 +58,9 @@ _CATEGORY_LABELS = {
     "liquidity": "유동성",
     "market": "산업",
 }
+_ALLOWED_CATEGORIES = {"금리", "환율", "경기", "규제", "지정학", "유동성", "산업"}
+_ALLOWED_GROUPS = {"isa", "coin", "cash"}
+_PRIORITY_RANK = {"urgent": 3, "caution": 2, "watch": 1}
 
 
 def stable_risk_id(topic: str, scope: str, assets: Sequence[str], asset_groups: Sequence[str]) -> str:
@@ -126,6 +136,355 @@ def build_news_risk_payload(
         "direct_risks": [risk for risk in risks if risk["scope"] == "direct"],
         "market_risks": [risk for risk in risks if risk["scope"] == "market"],
     }
+
+
+def merge_codex_news_risks(
+    base_payload: dict[str, Any],
+    codex_payload: dict[str, Any],
+    portfolio: PortfolioEvaluation,
+    merged_at: datetime | None = None,
+) -> dict[str, Any]:
+    validate_news_risk_payload(base_payload)
+    validate_codex_news_risk_payload(codex_payload)
+    now = _comparable_datetime(merged_at or datetime.now(timezone.utc))
+    codex_generated_at = _parse_iso_datetime(codex_payload["generated_at"])
+    stale_codex = codex_generated_at < now - timedelta(hours=72)
+    result = copy.deepcopy(base_payload)
+    portfolio_assets = {asset.symbol: asset for asset in portfolio.assets}
+    portfolio_groups = {_payload_group(asset.asset_type) for asset in portfolio.assets}
+    by_id = {
+        risk["risk_id"]: risk
+        for risk in result["direct_risks"] + result["market_risks"]
+    }
+
+    for codex_risk in codex_payload["risks"]:
+        risk_id = codex_risk["risk_id"]
+        if risk_id is not None:
+            existing = by_id.get(risk_id)
+            if existing is None:
+                raise ValueError(f"unknown Codex risk_id: {risk_id}")
+            _merge_existing_codex_risk(existing, codex_risk, codex_generated_at, stale_codex)
+            continue
+
+        new_risk = _build_codex_risk(
+            codex_risk,
+            portfolio_assets,
+            portfolio_groups,
+            codex_generated_at,
+            stale_codex,
+            now,
+        )
+        by_id[new_risk["risk_id"]] = new_risk
+        result[f"{new_risk['scope']}_risks"].append(new_risk)
+
+    result["generated_at"] = now.isoformat()
+    result["codex_generated_at"] = codex_generated_at.isoformat()
+    if result["status"] != "delayed":
+        result["status"] = "refresh_required" if stale_codex else "actual"
+    result["direct_risks"] = sorted(result["direct_risks"], key=_risk_sort_key, reverse=True)
+    result["market_risks"] = sorted(result["market_risks"], key=_risk_sort_key, reverse=True)
+    validate_news_risk_payload(result)
+    return result
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    source = Path(path)
+    if not source.exists():
+        raise FileNotFoundError(f"JSON 파일을 찾을 수 없습니다: {source}")
+    value = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON 최상위 값은 객체여야 합니다: {source}")
+    return value
+
+
+def validate_news_risk_payload(payload: dict[str, Any]) -> None:
+    assert_cloud_safe(payload)
+    if not isinstance(payload, dict) or payload.get("schema_version") != "news_risk_payload_v1":
+        raise ValueError("news risk payload must use news_risk_payload_v1")
+    _require_iso_datetime(payload.get("generated_at"), "generated_at")
+    if payload.get("lookback_hours") != 72:
+        raise ValueError("news risk lookback_hours must be 72")
+    for field in ("rss_generated_at", "codex_generated_at"):
+        if payload.get(field) is not None:
+            _require_iso_datetime(payload[field], field)
+    if payload.get("status") not in {"actual", "delayed", "refresh_required"}:
+        raise ValueError("invalid news risk status")
+    for field, scope in (("direct_risks", "direct"), ("market_risks", "market")):
+        risks = payload.get(field)
+        if not isinstance(risks, list):
+            raise ValueError(f"{field} must be a list")
+        for risk in risks:
+            _validate_news_risk_item(risk, expected_scope=scope)
+
+
+def validate_codex_news_risk_payload(payload: dict[str, Any]) -> None:
+    assert_cloud_safe(payload)
+    if not isinstance(payload, dict) or payload.get("schema_version") != "codex_news_risk_v1":
+        raise ValueError("Codex payload must use codex_news_risk_v1")
+    _require_iso_datetime(payload.get("generated_at"), "generated_at")
+    risks = payload.get("risks")
+    if not isinstance(risks, list):
+        raise ValueError("Codex risks must be a list")
+    for risk in risks:
+        if not isinstance(risk, dict):
+            raise ValueError("Codex risk must be an object")
+        if risk.get("risk_id") is not None and not isinstance(risk.get("risk_id"), str):
+            raise ValueError("Codex risk_id must be a string or null")
+        scope = risk.get("scope")
+        if scope not in {"direct", "market"}:
+            raise ValueError("invalid Codex risk scope")
+        for field in ("title", "potential_impact", "transmission_path"):
+            _require_non_empty_string(risk.get(field), field)
+        if risk.get("category") not in _ALLOWED_CATEGORIES:
+            raise ValueError("invalid Codex risk category")
+        for field in ("facts", "related_assets", "related_asset_groups", "watch_indicators", "counter_evidence"):
+            _require_string_list(risk.get(field), field)
+        if not set(risk["related_asset_groups"]) <= _ALLOWED_GROUPS:
+            raise ValueError("invalid Codex risk asset group")
+        _require_source_links(risk.get("source_links"), allow_unsafe=True)
+        if risk.get("change_reason") is not None and not isinstance(risk.get("change_reason"), str):
+            raise ValueError("Codex change_reason must be a string or null")
+        if scope == "direct" and not risk["related_assets"]:
+            raise ValueError("direct Codex risk related_assets must not be empty")
+        if scope == "market" and not risk["related_asset_groups"]:
+            raise ValueError("market Codex risk related_asset_groups must not be empty")
+
+
+def save_news_risk_payload(payload: dict[str, Any], path: Path) -> None:
+    validate_news_risk_payload(payload)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    try:
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _merge_existing_codex_risk(
+    existing: dict[str, Any],
+    codex_risk: dict[str, Any],
+    generated_at: datetime,
+    stale: bool,
+) -> None:
+    if (
+        existing["scope"] != codex_risk["scope"]
+        or set(existing["related_assets"]) != set(codex_risk["related_assets"])
+        or set(existing["related_asset_groups"]) != set(codex_risk["related_asset_groups"])
+    ):
+        raise ValueError(f"Codex risk identity does not match existing risk_id: {existing['risk_id']}")
+    interpretation_changed = any(
+        existing[field] != codex_risk[field]
+        for field in ("title", "category", "potential_impact", "transmission_path")
+    )
+    if interpretation_changed and not str(codex_risk.get("change_reason") or "").strip():
+        raise ValueError("Codex interpretation change requires change_reason")
+    for field in (
+        "title",
+        "category",
+        "facts",
+        "potential_impact",
+        "transmission_path",
+        "watch_indicators",
+        "counter_evidence",
+        "change_reason",
+    ):
+        existing[field] = copy.deepcopy(codex_risk[field])
+    existing["source_type"] = sorted(set(existing["source_type"]) | {"codex_research"})
+    existing["source_links"] = _safe_source_links([*existing["source_links"], *codex_risk["source_links"]])
+    existing["last_updated_at"] = generated_at.isoformat()
+    existing["freshness"] = "refresh_required" if stale else "new"
+
+
+def _build_codex_risk(
+    codex_risk: dict[str, Any],
+    portfolio_assets: dict[str, Any],
+    portfolio_groups: set[str],
+    generated_at: datetime,
+    stale: bool,
+    now: datetime,
+) -> dict[str, Any]:
+    related_assets = sorted(set(codex_risk["related_assets"]) & set(portfolio_assets))
+    related_groups = sorted(set(codex_risk["related_asset_groups"]) & portfolio_groups)
+    if codex_risk["scope"] == "direct":
+        if not related_assets:
+            raise ValueError("Codex risk has no portfolio connection")
+        expected_groups = sorted({_payload_group(portfolio_assets[symbol].asset_type) for symbol in related_assets})
+        if related_groups != expected_groups:
+            raise ValueError("Codex direct risk asset groups do not match portfolio")
+    elif not related_groups:
+        raise ValueError("Codex risk has no portfolio connection")
+
+    related_weight_pct = round(
+        sum(
+            asset.current_weight
+            for asset in portfolio_assets.values()
+            if asset.symbol in related_assets
+            or (codex_risk["scope"] == "market" and _payload_group(asset.asset_type) in related_groups)
+        )
+        * 100,
+        4,
+    )
+    links = _safe_source_links(codex_risk["source_links"])
+    sources = [
+        NewsItem(title=link["title"], summary="", source=link["title"], url=link["url"])
+        for link in links
+    ]
+    score, reasons = _priority_score(
+        related_weight_pct=related_weight_pct,
+        direct=codex_risk["scope"] == "direct",
+        source_count=len({urlparse(link["url"]).hostname for link in links}),
+        article_count=max(1, len(links)),
+        source_quality=_source_quality(sources),
+        strong=True,
+        fresh=generated_at >= now - timedelta(hours=24),
+    )
+    risk_id = stable_risk_id(
+        f"{codex_risk['category']}|{codex_risk['title']}",
+        codex_risk["scope"],
+        related_assets,
+        related_groups,
+    )
+    return {
+        "risk_id": risk_id,
+        "scope": codex_risk["scope"],
+        "priority": _priority(score),
+        "title": codex_risk["title"],
+        "category": codex_risk["category"],
+        "source_type": ["codex_research"],
+        "facts": copy.deepcopy(codex_risk["facts"]),
+        "potential_impact": codex_risk["potential_impact"],
+        "transmission_path": codex_risk["transmission_path"],
+        "related_assets": related_assets,
+        "related_asset_groups": related_groups,
+        "related_asset_weight_pct": related_weight_pct,
+        "watch_indicators": copy.deepcopy(codex_risk["watch_indicators"]),
+        "counter_evidence": copy.deepcopy(codex_risk["counter_evidence"]),
+        "priority_reasons": reasons,
+        "source_links": links,
+        "first_seen_at": generated_at.isoformat(),
+        "last_updated_at": generated_at.isoformat(),
+        "freshness": "refresh_required" if stale else ("new" if generated_at >= now - timedelta(hours=24) else "active"),
+        "change_reason": codex_risk["change_reason"],
+    }
+
+
+def _validate_news_risk_item(risk: Any, expected_scope: str) -> None:
+    if not isinstance(risk, dict):
+        raise ValueError("news risk item must be an object")
+    if risk.get("scope") != expected_scope:
+        raise ValueError("news risk item scope does not match its collection")
+    _require_non_empty_string(risk.get("risk_id"), "risk_id")
+    _require_non_empty_string(risk.get("title"), "title")
+    if risk.get("priority") not in _PRIORITY_RANK:
+        raise ValueError("invalid news risk priority")
+    if risk.get("category") not in _ALLOWED_CATEGORIES:
+        raise ValueError("invalid news risk category")
+    if risk.get("freshness") not in {"new", "active", "refresh_required"}:
+        raise ValueError("invalid news risk freshness")
+    for field in (
+        "source_type",
+        "facts",
+        "related_assets",
+        "related_asset_groups",
+        "watch_indicators",
+        "counter_evidence",
+        "priority_reasons",
+    ):
+        _require_string_list(risk.get(field), field)
+    if not set(risk["source_type"]) <= {"rss_rule", "codex_research"}:
+        raise ValueError("invalid news risk source_type")
+    if not set(risk["related_asset_groups"]) <= _ALLOWED_GROUPS:
+        raise ValueError("invalid news risk asset group")
+    for field in ("potential_impact", "transmission_path"):
+        _require_non_empty_string(risk.get(field), field)
+    weight = risk.get("related_asset_weight_pct")
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight):
+        raise ValueError("related_asset_weight_pct must be a finite number")
+    _require_source_links(risk.get("source_links"), allow_unsafe=False)
+    _require_iso_datetime(risk.get("first_seen_at"), "first_seen_at")
+    _require_iso_datetime(risk.get("last_updated_at"), "last_updated_at")
+    if risk.get("change_reason") is not None and not isinstance(risk.get("change_reason"), str):
+        raise ValueError("change_reason must be a string or null")
+
+
+def _require_string_list(value: Any, field: str) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{field} must be a string list")
+
+
+def _require_source_links(value: Any, allow_unsafe: bool) -> None:
+    if not isinstance(value, list):
+        raise ValueError("source_links must be a list")
+    for link in value:
+        if not isinstance(link, dict) or set(link) != {"title", "url"}:
+            raise ValueError("source_links entries must contain title and url")
+        _require_non_empty_string(link["title"], "source link title")
+        _require_non_empty_string(link["url"], "source link url")
+        if not allow_unsafe and not _safe_external_http_url(link["url"]):
+            raise ValueError("unsafe source link URL")
+
+
+def _require_non_empty_string(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+
+
+def _require_iso_datetime(value: Any, field: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be an ISO datetime string")
+    _parse_iso_datetime(value)
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    try:
+        return _comparable_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError as exc:
+        raise ValueError(f"invalid ISO datetime: {value}") from exc
+
+
+def _safe_source_links(links: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for link in links:
+        url = link["url"]
+        if url in seen or not _safe_external_http_url(url):
+            continue
+        seen.add(url)
+        result.append({"title": link["title"], "url": url})
+    return result
+
+
+def _safe_external_http_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        hostname = parsed.hostname.casefold()
+        if "." not in hostname or hostname == "localhost" or hostname.endswith((".localhost", ".local")):
+            return False
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return True
+        return not (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_unspecified
+        )
+    except ValueError:
+        return False
+
+
+def _risk_sort_key(risk: dict[str, Any]) -> tuple[int, float, str]:
+    return (
+        _PRIORITY_RANK[risk["priority"]],
+        float(risk["related_asset_weight_pct"]),
+        risk["last_updated_at"],
+    )
 
 
 def _build_risk(event: Dict[str, Any], portfolio_assets: Dict[str, Any], now: datetime) -> Dict[str, Any]:

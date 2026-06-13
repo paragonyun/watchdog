@@ -1,9 +1,20 @@
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
 
 from portfolio_watchdog.models import AssetEvaluation, NewsItem, PortfolioEvaluation
 from portfolio_watchdog.news_analysis import risk_news_queries
-from portfolio_watchdog.news_risk import build_news_risk_payload, stable_risk_id
+from portfolio_watchdog.news_risk import (
+    build_news_risk_payload,
+    load_json_object,
+    merge_codex_news_risks,
+    save_news_risk_payload,
+    stable_risk_id,
+    validate_codex_news_risk_payload,
+    validate_news_risk_payload,
+)
 
 
 NOW = datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc)
@@ -260,3 +271,232 @@ def test_risks_are_sorted_by_score_then_weight_then_latest_time() -> None:
     )
 
     assert [risk["related_assets"] for risk in payload["direct_risks"]] == [["TIGER_SP500"], ["BTC"]]
+
+
+def _codex_risk(**overrides) -> dict:
+    value = {
+        "risk_id": None,
+        "scope": "market",
+        "title": "달러 유동성 축소",
+        "category": "유동성",
+        "facts": ["달러 조달 비용 상승"],
+        "potential_impact": "위험 자산 가격 압력",
+        "transmission_path": "달러 강세 -> 위험 선호 약화",
+        "related_assets": [],
+        "related_asset_groups": ["coin", "isa"],
+        "watch_indicators": ["달러 인덱스"],
+        "counter_evidence": ["정책 완화 가능성"],
+        "source_links": [{"title": "Reuters", "url": "https://reuters.com/usd"}],
+        "change_reason": None,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_codex_merge_enriches_existing_risk_and_adds_new_event() -> None:
+    base = build_news_risk_payload(
+        [_news("비트코인 거래 규제 강화", related_assets=["BTC"], source="Reuters")],
+        _portfolio(),
+        generated_at=NOW,
+    )
+    risk_id = base["direct_risks"][0]["risk_id"]
+    codex = {
+        "schema_version": "codex_news_risk_v1",
+        "generated_at": NOW.isoformat(),
+        "risks": [
+            _codex_risk(
+                risk_id=risk_id,
+                scope="direct",
+                title="비트코인 거래 규제 강화",
+                category="규제",
+                facts=["당국이 규제 검토를 공식 발표"],
+                potential_impact="거래 유동성 위축 가능성",
+                transmission_path="거래 제한 -> 유동성 축소 -> 변동성 확대",
+                related_assets=["BTC"],
+                related_asset_groups=["coin"],
+                watch_indicators=["거래소 순유출"],
+                counter_evidence=["시행 일정은 미정"],
+                change_reason="공식 발표를 반영해 전달 경로 보강",
+            ),
+            _codex_risk(),
+        ],
+    }
+
+    merged = merge_codex_news_risks(base, codex, _portfolio(), merged_at=NOW)
+
+    enriched = merged["direct_risks"][0]
+    assert enriched["facts"] == ["당국이 규제 검토를 공식 발표"]
+    assert enriched["transmission_path"] == "거래 제한 -> 유동성 축소 -> 변동성 확대"
+    assert enriched["change_reason"] == "공식 발표를 반영해 전달 경로 보강"
+    assert "codex_research" in enriched["source_type"]
+    assert {link["url"] for link in enriched["source_links"]} == {
+        "https://example.com/news",
+        "https://reuters.com/usd",
+    }
+    assert len(merged["market_risks"]) == 1
+    assert merged["market_risks"][0]["risk_id"]
+    assert merged["codex_generated_at"] == NOW.isoformat()
+
+
+def test_codex_merge_rejects_unknown_existing_risk_and_unexplained_interpretation_change() -> None:
+    base = build_news_risk_payload(
+        [_news("비트코인 거래 규제 강화", related_assets=["BTC"])],
+        _portfolio(),
+        generated_at=NOW,
+    )
+    risk_id = base["direct_risks"][0]["risk_id"]
+
+    with pytest.raises(ValueError, match="unknown Codex risk_id"):
+        merge_codex_news_risks(
+            base,
+            {"schema_version": "codex_news_risk_v1", "generated_at": NOW.isoformat(), "risks": [_codex_risk(risk_id="missing")]},
+            _portfolio(),
+            merged_at=NOW,
+        )
+
+    changed = _codex_risk(
+        risk_id=risk_id,
+        scope="direct",
+        title="비트코인 규제 위험 재평가",
+        category="규제",
+        related_assets=["BTC"],
+        related_asset_groups=["coin"],
+        change_reason=None,
+    )
+    with pytest.raises(ValueError, match="change_reason"):
+        merge_codex_news_risks(
+            base,
+            {"schema_version": "codex_news_risk_v1", "generated_at": NOW.isoformat(), "risks": [changed]},
+            _portfolio(),
+            merged_at=NOW,
+        )
+
+
+def test_codex_merge_accepts_equivalent_identity_lists_in_different_order() -> None:
+    portfolio = PortfolioEvaluation(
+        assets=[
+            *_portfolio().assets,
+            AssetEvaluation(
+                symbol="ETH",
+                name="이더리움",
+                asset_type="coin",
+                target_weight=0,
+                current_quantity=1,
+                manual_value_krw=None,
+                current_value_krw=0,
+                current_weight=0,
+            ),
+        ],
+        total_value_krw=1000,
+    )
+    base = build_news_risk_payload(
+        [_news("비트코인 이더리움 거래 규제 강화", related_assets=["BTC", "ETH"])],
+        portfolio,
+        generated_at=NOW,
+    )
+    risk_id = base["direct_risks"][0]["risk_id"]
+    codex = _codex_risk(
+        risk_id=risk_id,
+        scope="direct",
+        title="비트코인 이더리움 거래 규제 강화",
+        category="규제",
+        related_assets=["ETH", "BTC"],
+        related_asset_groups=["coin"],
+        change_reason="관련 자산 순서를 정규화",
+    )
+
+    merged = merge_codex_news_risks(
+        base,
+        {"schema_version": "codex_news_risk_v1", "generated_at": NOW.isoformat(), "risks": [codex]},
+        portfolio,
+        merged_at=NOW,
+    )
+
+    assert merged["direct_risks"][0]["risk_id"] == risk_id
+
+
+def test_validation_rejects_sensitive_fields_and_invalid_contracts() -> None:
+    payload = build_news_risk_payload([], _portfolio(), generated_at=NOW)
+    payload["direct_risks"] = [{"quantity": 1}]
+    with pytest.raises(ValueError, match="forbidden cloud field"):
+        validate_news_risk_payload(payload)
+
+    with pytest.raises(ValueError, match="codex_news_risk_v1"):
+        validate_codex_news_risk_payload({"schema_version": "wrong", "generated_at": NOW.isoformat(), "risks": []})
+
+    with pytest.raises(ValueError, match="related_assets"):
+        validate_codex_news_risk_payload(
+            {
+                "schema_version": "codex_news_risk_v1",
+                "generated_at": NOW.isoformat(),
+                "risks": [_codex_risk(scope="direct", related_assets=[])],
+            }
+        )
+
+    with pytest.raises(ValueError, match="asset group"):
+        validate_codex_news_risk_payload(
+            {
+                "schema_version": "codex_news_risk_v1",
+                "generated_at": NOW.isoformat(),
+                "risks": [_codex_risk(related_asset_groups=["coin", "unknown"])],
+            }
+        )
+
+
+def test_merge_removes_unsafe_source_urls_and_rejects_unconnected_new_event() -> None:
+    base = build_news_risk_payload([], _portfolio(), generated_at=NOW)
+    unsafe = _codex_risk(
+        source_links=[
+            {"title": "script", "url": "javascript:alert(1)"},
+            {"title": "loopback", "url": "http://127.0.0.1/private"},
+            {"title": "private", "url": "http://192.168.0.1/private"},
+            {"title": "internal", "url": "http://intranet/private"},
+            {"title": "credentials", "url": "https://user:pass@example.com/private"},
+            {"title": "safe", "url": "https://example.com/public"},
+        ]
+    )
+
+    merged = merge_codex_news_risks(
+        base,
+        {"schema_version": "codex_news_risk_v1", "generated_at": NOW.isoformat(), "risks": [unsafe]},
+        _portfolio(),
+        merged_at=NOW,
+    )
+
+    assert merged["market_risks"][0]["source_links"] == [{"title": "safe", "url": "https://example.com/public"}]
+
+    with pytest.raises(ValueError, match="portfolio connection"):
+        merge_codex_news_risks(
+            base,
+            {
+                "schema_version": "codex_news_risk_v1",
+                "generated_at": NOW.isoformat(),
+                "risks": [_codex_risk(related_asset_groups=["cash"])],
+            },
+            _portfolio(),
+            merged_at=NOW,
+        )
+
+
+def test_merge_marks_old_codex_analysis_refresh_required_but_preserves_delayed_status() -> None:
+    old = (NOW - timedelta(hours=73)).isoformat()
+    base = build_news_risk_payload([], _portfolio(), generated_at=NOW)
+    old_codex = {"schema_version": "codex_news_risk_v1", "generated_at": old, "risks": [_codex_risk()]}
+
+    refreshed = merge_codex_news_risks(base, old_codex, _portfolio(), merged_at=NOW)
+    assert refreshed["status"] == "refresh_required"
+    assert refreshed["market_risks"][0]["freshness"] == "refresh_required"
+
+    base["status"] = "delayed"
+    delayed = merge_codex_news_risks(base, old_codex, _portfolio(), merged_at=NOW)
+    assert delayed["status"] == "delayed"
+
+
+def test_save_and_load_news_risk_payload_atomically(tmp_path: Path) -> None:
+    path = tmp_path / "news_risk_latest.json"
+    payload = build_news_risk_payload([], _portfolio(), generated_at=NOW)
+
+    save_news_risk_payload(payload, path)
+
+    assert load_json_object(path) == payload
+    assert list(tmp_path.glob("*.tmp")) == []
