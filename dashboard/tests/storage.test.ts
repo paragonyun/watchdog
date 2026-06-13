@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { blobKeyForPayload, getLatestDashboardData, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
+import { NEWS_RISK_BLOB_KEY, blobKeyForPayload, getLatestDashboardData, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
 
 const validPayload = {
   schema_version: "dashboard_payload_v1",
@@ -45,6 +45,10 @@ test("valid blob payload is preferred over sample data", () => {
 test("v1 and v2 payloads use separate blob keys", () => {
   assert.equal(blobKeyForPayload({ schema_version: "dashboard_payload_v1" }), "dashboard/latest.json");
   assert.equal(blobKeyForPayload({ schema_version: "dashboard_payload_v2" }), "dashboard/v2-latest.json");
+});
+
+test("news risk payload uses an independent private blob key", () => {
+  assert.equal(NEWS_RISK_BLOB_KEY, "dashboard/news-risk-latest.json");
 });
 
 test("dashboard payload resolver keeps valid v1 and v2 data together", () => {

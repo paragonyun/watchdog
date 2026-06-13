@@ -197,7 +197,7 @@ const FORBIDDEN_CLOUD_FIELDS = new Set([
   "memo",
 ]);
 
-function hasForbiddenCloudField(value: unknown): boolean {
+export function hasForbiddenCloudField(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some(hasForbiddenCloudField);
   }

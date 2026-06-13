@@ -1,6 +1,7 @@
 import { verifyBearerToken } from "@/lib/auth-core";
 import { validateDashboardPayload } from "@/lib/dashboard-payload";
-import { saveLatestDashboardPayload } from "@/lib/storage";
+import { validateNewsRiskPayload } from "@/lib/news-risk-payload";
+import { saveLatestDashboardPayload, saveLatestNewsRiskPayload } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
@@ -17,12 +18,17 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "invalid_json" }, { status: 400 });
   }
 
-  if (!validateDashboardPayload(body)) {
-    return Response.json({ ok: false, error: "invalid_dashboard_payload" }, { status: 400 });
+  if (validateDashboardPayload(body)) {
+    await saveLatestDashboardPayload(body);
+    return Response.json({ ok: true, generated_at: body.generated_at });
   }
 
-  await saveLatestDashboardPayload(body);
-  return Response.json({ ok: true, generated_at: body.generated_at });
+  if (validateNewsRiskPayload(body)) {
+    await saveLatestNewsRiskPayload(body);
+    return Response.json({ ok: true, generated_at: body.generated_at });
+  }
+
+  return Response.json({ ok: false, error: "invalid_upload_payload" }, { status: 400 });
 }
 
 function parseBearerToken(value: string | null): string | undefined {
