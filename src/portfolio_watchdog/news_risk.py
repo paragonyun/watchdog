@@ -45,6 +45,17 @@ _PRIMARY_SOURCE_MARKERS = (
 )
 _PRIMARY_DOMAINS = (".go.kr", ".gov", "federalreserve.gov")
 _MAJOR_NEWS_MARKERS = ("reuters", "bloomberg")
+_CATEGORY_LABELS = {
+    "security": "산업",
+    "regulation": "규제",
+    "rates": "금리",
+    "inflation": "금리",
+    "fx": "환율",
+    "economy": "경기",
+    "geopolitics": "지정학",
+    "liquidity": "유동성",
+    "market": "산업",
+}
 
 
 def stable_risk_id(topic: str, scope: str, assets: Sequence[str], asset_groups: Sequence[str]) -> str:
@@ -111,7 +122,7 @@ def build_news_risk_payload(
     risks = [_build_risk(event, portfolio_assets, now) for event in events.values()]
     risks.sort(key=lambda risk: (risk.pop("_score"), risk["related_asset_weight_pct"], risk["last_updated_at"]), reverse=True)
     return {
-        "schema": "news_risk_payload_v1",
+        "schema_version": "news_risk_payload_v1",
         "generated_at": now.isoformat(),
         "lookback_hours": 72,
         "rss_generated_at": now.isoformat(),
@@ -143,40 +154,47 @@ def _build_risk(event: Dict[str, Any], portfolio_assets: Dict[str, Any], now: da
         strong=event["strong"],
         fresh=last_updated >= _comparable_datetime(now) - timedelta(hours=24),
     )
-    links = list(dict.fromkeys(item.url for item in items if _safe_http_url(item.url)))
+    links = list(
+        {
+            item.url: {"title": item.title, "url": item.url}
+            for item in items
+            if _safe_http_url(item.url)
+        }.values()
+    )
     title = max(items, key=lambda item: _comparable_datetime(item.published_at)).title
-    category = event["category"]
+    category_key = event["category"]
     return {
         "_score": score,
         "risk_id": event["risk_id"],
         "scope": event["scope"],
         "priority": _priority(score),
         "title": title,
-        "category": category,
+        "category": _CATEGORY_LABELS[category_key],
         "source_type": ["rss_rule"],
         "facts": [f"{item.source}: {item.title}" for item in items],
-        "potential_impact": _potential_impact(category, event["related_asset_groups"]),
-        "transmission_path": _transmission_path(category),
+        "potential_impact": _potential_impact(_CATEGORY_LABELS[category_key], event["related_asset_groups"]),
+        "transmission_path": _transmission_path(category_key),
         "related_assets": event["related_assets"],
         "related_asset_groups": event["related_asset_groups"],
         "related_asset_weight_pct": related_weight_pct,
-        "watch_indicators": _watch_indicators(category),
+        "watch_indicators": _watch_indicators(category_key),
         "counter_evidence": [],
         "priority_reasons": reasons,
         "source_links": links,
         "first_seen_at": first_seen.isoformat(),
         "last_updated_at": last_updated.isoformat(),
-        "freshness": "new" if last_updated >= _comparable_datetime(now) - timedelta(hours=24) else "recent",
+        "freshness": _freshness(dated_items, last_updated, now),
         "change_reason": None,
     }
 
 
 def _risk_signal(item: NewsItem) -> Optional[Tuple[str, str, bool]]:
     text = _normalize(f"{item.title} {item.summary} {item.reason}")
+    matches: List[Tuple[str, str, bool]] = []
     for category, signal, keywords, strong in _RISK_SIGNALS:
         if any(_normalize(keyword) in text for keyword in keywords):
-            return category, signal, strong
-    return None
+            matches.append((category, signal, strong))
+    return max(matches, key=lambda match: match[2]) if matches else None
 
 
 def _priority_score(
@@ -209,12 +227,9 @@ def _priority_score(
     elif source_count == 2:
         score += 1
         reasons.append("독립 출처 2개 (+1)")
-    elif article_count >= 3:
-        score += 2
-        reasons.append("반복 기사 3건 이상 (+2)")
-    elif article_count == 2:
-        score += 1
-        reasons.append("반복 기사 2건 (+1)")
+    else:
+        reasons.append(f"독립 출처 {source_count}개")
+    reasons.append(f"반복 기사 {article_count}건")
     if source_quality == 2:
         score += 2
         reasons.append("1차 출처 포함 (+2)")
@@ -263,6 +278,14 @@ def _comparable_datetime(value: Optional[datetime]) -> datetime:
     if value is None:
         return datetime.min.replace(tzinfo=timezone.utc)
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _freshness(dated_items: Sequence[NewsItem], last_updated: datetime, now: datetime) -> str:
+    if not dated_items:
+        return "refresh_required"
+    if last_updated >= _comparable_datetime(now) - timedelta(hours=24):
+        return "new"
+    return "active"
 
 
 def _normalize(value: str) -> str:

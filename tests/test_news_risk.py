@@ -75,7 +75,8 @@ def test_build_payload_separates_direct_and_market_and_excludes_positive_news() 
         generated_at=NOW,
     )
 
-    assert payload["schema"] == "news_risk_payload_v1"
+    assert payload["schema_version"] == "news_risk_payload_v1"
+    assert "schema" not in payload
     assert payload["generated_at"] == NOW.isoformat()
     assert payload["lookback_hours"] == 72
     assert payload["rss_generated_at"] == NOW.isoformat()
@@ -115,15 +116,17 @@ def test_event_merge_counts_independent_sources_and_records_score_reasons() -> N
     assert "관련 비중 15% 이상 (+2)" in risk["priority_reasons"]
     assert "직접 관련 자산 (+2)" in risk["priority_reasons"]
     assert "독립 출처 3개 이상 (+2)" in risk["priority_reasons"]
+    assert "반복 기사 4건" in risk["priority_reasons"]
     assert "1차 출처 포함 (+2)" in risk["priority_reasons"]
     assert "강한 위험 신호 (+2)" in risk["priority_reasons"]
     assert "24시간 이내 신규 (+1)" in risk["priority_reasons"]
     assert len(risk["facts"]) == 4
     assert len(risk["source_links"]) == 3
-    assert all(link.startswith(("http://", "https://")) for link in risk["source_links"])
+    assert all(set(link) == {"title", "url"} for link in risk["source_links"])
+    assert all(link["url"].startswith(("http://", "https://")) for link in risk["source_links"])
 
 
-def test_repeated_articles_add_evidence_score_without_independent_sources() -> None:
+def test_repeated_articles_are_recorded_without_inflating_independent_source_score() -> None:
     payload = build_news_risk_payload(
         [
             _news("비트코인 거래 규제 강화", related_assets=["BTC"], url="https://example.com/a"),
@@ -133,7 +136,48 @@ def test_repeated_articles_add_evidence_score_without_independent_sources() -> N
         generated_at=NOW,
     )
 
-    assert "반복 기사 2건 (+1)" in payload["direct_risks"][0]["priority_reasons"]
+    risk = payload["direct_risks"][0]
+    assert risk["priority"] == "caution"
+    assert "반복 기사 2건" in risk["priority_reasons"]
+    assert "독립 출처 1개" in risk["priority_reasons"]
+    assert not any("(+" in reason for reason in risk["priority_reasons"] if reason.startswith(("독립 출처", "반복 기사")))
+
+
+def test_contract_uses_allowed_categories_link_objects_and_freshness_values() -> None:
+    payload = build_news_risk_payload(
+        [
+            _news("비트코인 거래 규제 강화", related_assets=["BTC"], url="https://example.com/new"),
+            _news("S&P500 경기 침체 우려", related_assets=["TIGER_SP500"], url="https://example.com/active", hours_ago=25),
+            NewsItem(
+                title="비트코인 해킹 우려",
+                summary="",
+                source="Example News",
+                url="https://example.com/undated",
+                related_assets=["BTC"],
+                impact="부정",
+            ),
+        ],
+        _portfolio(),
+        generated_at=NOW,
+    )
+
+    risks = payload["direct_risks"]
+    assert {risk["category"] for risk in risks} <= {"금리", "환율", "경기", "규제", "지정학", "유동성", "산업"}
+    assert {risk["freshness"] for risk in risks} == {"new", "active", "refresh_required"}
+    assert all(set(link) == {"title", "url"} for risk in risks for link in risk["source_links"])
+
+
+def test_strongest_risk_signal_prefers_strong_match_over_earlier_general_match() -> None:
+    payload = build_news_risk_payload(
+        [_news("환율 변동 속 경기 침체 우려", related_assets=["TIGER_SP500"])],
+        _portfolio(),
+        generated_at=NOW,
+    )
+
+    risk = payload["direct_risks"][0]
+    assert risk["category"] == "경기"
+    assert risk["risk_id"] == stable_risk_id("economy|침체", "direct", ["TIGER_SP500"], ["isa"])
+    assert "강한 위험 신호 (+2)" in risk["priority_reasons"]
 
 
 def test_unconnected_news_is_excluded_and_equity_group_is_isa() -> None:
