@@ -8,24 +8,34 @@ import {
 import { requireSession } from "@/lib/auth";
 import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
 import { formatDashboardDate } from "@/lib/format-date";
+import { buildNewsRiskView, type NewsRiskView, type NewsRiskViewItem } from "@/lib/news-risk-view";
 import { buildRiskView, type RiskLevel, type RiskView } from "@/lib/risk-view";
-import { getLatestDashboardPayloads } from "@/lib/storage";
+import { getLatestDashboardPayloads, getLatestNewsRiskPayload } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
 export default async function RiskPage() {
   await requireSession();
-  const { v1, v2 } = await getLatestDashboardPayloads();
+  const [{ v1, v2 }, newsRiskPayload] = await Promise.all([
+    getLatestDashboardPayloads(),
+    getLatestNewsRiskPayload(),
+  ]);
 
   if (!v1 && !v2) {
     return <EmptyRiskPage />;
   }
 
   const view = buildDashboardView(v1, v2);
-  return <RiskScreen view={view} risk={buildRiskView(view)} />;
+  return (
+    <RiskScreen
+      view={view}
+      risk={buildRiskView(view)}
+      newsRisk={newsRiskPayload ? buildNewsRiskView(newsRiskPayload) : null}
+    />
+  );
 }
 
-function RiskScreen({ view, risk }: { view: DashboardView; risk: RiskView }) {
+function RiskScreen({ view, risk, newsRisk }: { view: DashboardView; risk: RiskView; newsRisk: NewsRiskView | null }) {
   return (
     <div className="app-frame">
       <DesktopTopNavigation active="risk" />
@@ -123,6 +133,8 @@ function RiskScreen({ view, risk }: { view: DashboardView; risk: RiskView }) {
           </section>
         </section>
 
+        <NewsRiskSection newsRisk={newsRisk} />
+
         <footer className="risk-footnote">
           <span>이 화면은 현재 데이터에 대한 확인 우선순위이며 매수·매도 의견이 아닙니다.</span>
           <span>성과 이력이 부족하면 낙폭과 TWR 위험 판단은 제한됩니다.</span>
@@ -131,6 +143,157 @@ function RiskScreen({ view, risk }: { view: DashboardView; risk: RiskView }) {
 
       <MobileBottomNavigation active="risk" />
     </div>
+  );
+}
+
+function NewsRiskSection({ newsRisk }: { newsRisk: NewsRiskView | null }) {
+  return (
+    <section className="news-risk-section" aria-labelledby="news-risk-title">
+      <header className="news-risk-section-heading">
+        <div>
+          <span>NEWS RISK RADAR</span>
+          <h2 id="news-risk-title">뉴스 기반 잠재 리스크</h2>
+          <p>최근 뉴스에서 보유 자산에 직접 닿는 위험과 시장을 통해 전이될 수 있는 위험을 분리해 보여줍니다.</p>
+        </div>
+        {newsRisk ? (
+          <div className={`news-risk-status ${newsRisk.needsRefresh ? "refresh" : "actual"}`}>
+            <span>분석 상태</span>
+            <strong>{newsRisk.statusLabel}</strong>
+            <small>RSS {formatDashboardDate(newsRisk.generatedAt)} · Codex {formatDashboardDate(newsRisk.codexGeneratedAt)}</small>
+          </div>
+        ) : null}
+      </header>
+
+      {newsRisk ? (
+        <>
+          <div className="news-risk-summary" aria-label="뉴스 리스크 요약">
+            <NewsRiskSummary label="직접 영향" value={`${newsRisk.directCount}건`} detail="보유 종목 연결" tone="direct" />
+            <NewsRiskSummary label="시장 전이" value={`${newsRisk.marketCount}건`} detail="자산군 연결" tone="market" />
+            <NewsRiskSummary label="신규 발견" value={`${newsRisk.newCount}건`} detail="최근 수집 이후" tone="new" />
+            <NewsRiskSummary
+              label="심층 분석"
+              value={newsRisk.codexGeneratedAt ? "반영됨" : "대기 중"}
+              detail={newsRisk.codexGeneratedAt ? formatDashboardDate(newsRisk.codexGeneratedAt) : "RSS 규칙 분석만 표시"}
+              tone={newsRisk.codexGeneratedAt ? "codex" : "refresh"}
+            />
+          </div>
+
+          <div className="news-risk-columns">
+            <NewsRiskGroup
+              description="보유 종목과 뉴스가 직접 연결된 위험"
+              emptyText="현재 확인된 직접 영향 리스크가 없습니다."
+              items={newsRisk.directRisks}
+              title="직접 영향 리스크"
+            />
+            <NewsRiskGroup
+              description="금리·환율·경기 등 시장 경로를 통한 잠재 위험"
+              emptyText="현재 확인된 시장 전이 리스크가 없습니다."
+              items={newsRisk.marketRisks}
+              title="시장 전이 리스크"
+            />
+          </div>
+        </>
+      ) : (
+        <section className="surface news-risk-unavailable">
+          <strong>아직 업로드된 뉴스 리스크 분석이 없습니다.</strong>
+          <p>Watchdog의 뉴스 리스크 동기화가 완료되면 이 영역에 RSS 규칙 분석과 Codex 심층 분석이 표시됩니다.</p>
+        </section>
+      )}
+    </section>
+  );
+}
+
+function NewsRiskSummary({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "direct" | "market" | "new" | "codex" | "refresh";
+}) {
+  return (
+    <article className={`news-risk-summary-item ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
+}
+
+function NewsRiskGroup({
+  title,
+  description,
+  items,
+  emptyText,
+}: {
+  title: string;
+  description: string;
+  items: NewsRiskViewItem[];
+  emptyText: string;
+}) {
+  return (
+    <section className="surface news-risk-group">
+      <header>
+        <div><h3>{title}</h3><p>{description}</p></div>
+        <span>{items.length}건</span>
+      </header>
+      {items.length ? (
+        <div className="news-risk-list">
+          {items.map((item, index) => <NewsRiskCard item={item} initiallyOpen={index < 5} key={item.id} />)}
+        </div>
+      ) : (
+        <p className="risk-empty">{emptyText}</p>
+      )}
+    </section>
+  );
+}
+
+function NewsRiskCard({ item, initiallyOpen }: { item: NewsRiskViewItem; initiallyOpen: boolean }) {
+  return (
+    <details className={`news-risk-card ${item.priority}`} open={initiallyOpen}>
+      <summary>
+        <div className="news-risk-card-tags">
+          <span className={`priority ${item.priority}`}>{item.priorityLabel}</span>
+          <span className={`freshness ${item.freshness}`}>{item.freshnessLabel}</span>
+          <span>{item.category}</span>
+        </div>
+        <h4>{item.title}</h4>
+        <p>{item.potential_impact}</p>
+        <div className="news-risk-card-meta">
+          <span>{item.related_assets.length ? item.related_assets.join(", ") : groupLabels(item.related_asset_groups)}</span>
+          <b>연결 비중 {formatPercent(item.related_asset_weight_pct)}</b>
+        </div>
+      </summary>
+      <div className="news-risk-detail">
+        <NewsRiskDetail title="확인된 사실" values={item.facts} />
+        <NewsRiskDetail title="전이 경로" values={[item.transmission_path]} />
+        <NewsRiskDetail title="관찰 지표" values={item.watch_indicators} />
+        <NewsRiskDetail title="반대 근거" values={item.counter_evidence} />
+        <NewsRiskDetail title="우선순위 근거" values={item.priority_reasons} />
+        {item.change_reason ? <NewsRiskDetail title="변경 이유" values={[item.change_reason]} /> : null}
+        <div className="news-risk-sources">
+          <div>{item.sourceLabels.map((source) => <span key={source}>{source}</span>)}</div>
+          <div>
+            {item.source_links.map((link) => (
+              <a href={link.url} key={`${link.title}-${link.url}`} rel="noreferrer" target="_blank">{link.title}</a>
+            ))}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function NewsRiskDetail({ title, values }: { title: string; values: string[] }) {
+  if (!values.length) return null;
+  return (
+    <section>
+      <h5>{title}</h5>
+      <ul>{values.map((value) => <li key={value}>{value}</li>)}</ul>
+    </section>
   );
 }
 
@@ -172,4 +335,9 @@ function formatSignedPercentagePoint(value: number | null): string {
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(100, value));
+}
+
+function groupLabels(groups: Array<"isa" | "coin" | "cash">): string {
+  const labels = { isa: "ISA", coin: "코인", cash: "현금" };
+  return groups.map((group) => labels[group]).join(", ");
 }
