@@ -8,10 +8,19 @@ import {
   type DashboardPayloadV2,
 } from "./dashboard-payload";
 import { validateNewsRiskPayload, type NewsRiskPayload } from "./news-risk-payload";
+import {
+  toReportIndexItem,
+  validReportId,
+  validateReportIndexItem,
+  validateReportPayload,
+  type ReportIndexItem,
+  type ReportPayload,
+} from "./report-payload";
 
 const BLOB_KEY = "dashboard/latest.json";
 const V2_BLOB_KEY = "dashboard/v2-latest.json";
 export const NEWS_RISK_BLOB_KEY = "dashboard/news-risk-latest.json";
+export const REPORT_INDEX_BLOB_KEY = "dashboard/reports/index.json";
 
 export type DashboardDataSource = "blob" | "sample" | "empty";
 
@@ -89,6 +98,44 @@ export async function getLatestNewsRiskPayload(): Promise<NewsRiskPayload | null
 export async function saveLatestNewsRiskPayload(payload: NewsRiskPayload): Promise<void> {
   const { put } = await import("@vercel/blob");
   await put(NEWS_RISK_BLOB_KEY, JSON.stringify(payload), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
+export function reportBlobKey(reportId: string): string {
+  if (!validReportId(reportId)) throw new Error("invalid report id");
+  return `dashboard/reports/${reportId}.json`;
+}
+
+export async function getReportIndex(): Promise<ReportIndexItem[]> {
+  const value = await readBlobPayload(REPORT_INDEX_BLOB_KEY);
+  return Array.isArray(value) ? value.filter(validateReportIndexItem) : [];
+}
+
+export async function getReportPayload(reportId: string): Promise<ReportPayload | null> {
+  const value = await readBlobPayload(reportBlobKey(reportId));
+  return validateReportPayload(value) ? value : null;
+}
+
+export async function saveReportPayload(payload: ReportPayload): Promise<void> {
+  const { put } = await import("@vercel/blob");
+  await put(reportBlobKey(payload.report_id), JSON.stringify(payload), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+  const existing = await getReportIndex();
+  const index = [
+    toReportIndexItem(payload),
+    ...existing.filter((item) => item.report_id !== payload.report_id),
+  ]
+    .sort((left, right) => Date.parse(right.generated_at) - Date.parse(left.generated_at))
+    .slice(0, 50);
+  await put(REPORT_INDEX_BLOB_KEY, JSON.stringify(index), {
     access: "private",
     addRandomSuffix: false,
     allowOverwrite: true,

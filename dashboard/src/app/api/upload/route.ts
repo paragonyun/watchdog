@@ -1,7 +1,8 @@
 import { verifyBearerToken } from "@/lib/auth-core";
 import { validateDashboardPayload } from "@/lib/dashboard-payload";
 import { validateNewsRiskPayload } from "@/lib/news-risk-payload";
-import { saveLatestDashboardPayload, saveLatestNewsRiskPayload } from "@/lib/storage";
+import { validateReportPayload } from "@/lib/report-payload";
+import { saveLatestDashboardPayload, saveLatestNewsRiskPayload, saveReportPayload } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,11 @@ export async function POST(request: Request) {
   if (validateNewsRiskPayload(body)) {
     await saveLatestNewsRiskPayload(body);
     return Response.json({ ok: true, generated_at: body.generated_at });
+  }
+
+  if (validateReportPayload(body)) {
+    await saveReportPayload(body);
+    return Response.json({ ok: true, generated_at: body.generated_at, report_id: body.report_id });
   }
 
   return Response.json({ ok: false, error: "invalid_upload_payload" }, { status: 400 });

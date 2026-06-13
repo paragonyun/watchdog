@@ -96,6 +96,7 @@ def test_complete_report_renders_sends_and_syncs(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(watchdog, "render_report_pdf", fake_render)
     monkeypatch.setattr(watchdog, "send_report_document", lambda path: calls.append(("send", path)))
     monkeypatch.setattr(watchdog, "sync_dashboard", lambda path: calls.append(("sync", path)))
+    monkeypatch.setattr(watchdog, "sync_report", lambda path: calls.append(("sync-report", path)))
 
     result = watchdog.complete_report(markdown, output, sync_dashboard=True)
 
@@ -104,6 +105,7 @@ def test_complete_report_renders_sends_and_syncs(monkeypatch, tmp_path) -> None:
         ("render", markdown, output),
         ("send", output),
         ("sync", markdown),
+        ("sync-report", markdown),
     ]
 
 
@@ -121,6 +123,26 @@ def test_sync_dashboard_uploads_summary_payload(monkeypatch, tmp_path) -> None:
     payload = watchdog.sync_dashboard(source)
 
     assert payload["schema_version"] == "dashboard_payload_v1"
+    assert calls[0][1:] == ("https://example.com/api/upload", "token")
+
+
+def test_sync_report_uploads_privacy_safe_archive(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={"WATCHDOG_DASHBOARD_UPLOAD_URL": "https://example.com/api/upload", "WATCHDOG_UPLOAD_TOKEN": "token"})
+    report = tmp_path / "portfolio_report_final_20260605_0800.md"
+    source = tmp_path / "portfolio_report_source_20260605_0800.json"
+    report.write_text("# 포트폴리오 리포트\n\n## 핵심 판단\n- 현 상태를 재검토합니다.", encoding="utf-8")
+    source.write_text(
+        '{"report_kind":"portfolio","generated_at":"2026-06-05T08:00:00","current_portfolio":{"total_value_krw":1000,"asset_groups":{"coin":200,"equity":700,"cash":100},"assets":[]},"trend":{},"news_impacts":[],"provider_status":[],"validation":{"valid":true,"issues":[]}}',
+        encoding="utf-8",
+    )
+    calls = []
+
+    monkeypatch.setattr(app_module, "upload_dashboard_payload", lambda payload, endpoint, token: calls.append((payload, endpoint, token)) or {"ok": True})
+
+    payload = watchdog.sync_report(report)
+
+    assert payload["schema_version"] == "dashboard_report_v1"
+    assert payload["document_status"] == "final"
     assert calls[0][1:] == ("https://example.com/api/upload", "token")
 
 
