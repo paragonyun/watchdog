@@ -57,6 +57,7 @@ from .providers.upbit import (
 )
 from .providers.news_provider import NewsProvider
 from .report_data import build_portfolio_report_source, build_report_caption, build_report_payload, build_weekly_report_source_from_payload, load_report_payload_for_path, write_report_artifact
+from .report_archive import build_report_archive_payload
 from .report_validation import require_valid_report_payload
 from .reports import build_asset_status_report, build_news_report, build_portfolio_report
 from .repositories.file_snapshot_repository import FileSnapshotRepository
@@ -803,6 +804,7 @@ class PortfolioWatchdogApp:
         self.send_report_document(pdf_path)
         if sync_dashboard:
             self.sync_dashboard(report_path)
+            self.sync_report(report_path)
         logger.info("Complete report processed: %s", pdf_path)
         return pdf_path
 
@@ -817,6 +819,29 @@ class PortfolioWatchdogApp:
         )
         logger.info("Dashboard synced: %s", result)
         return dashboard_payload
+
+    def sync_report(self, path: Path) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        report_path = Path(path)
+        if not report_path.exists():
+            raise FileNotFoundError(f"리포트 동기화 원본을 찾을 수 없습니다: {report_path}")
+        if not report_path.is_file():
+            raise ValueError(f"리포트 동기화 경로가 파일이 아닙니다: {report_path}")
+        source_payload = load_report_payload_for_path(report_path)
+        if source_payload is None:
+            raise ValueError(f"리포트 payload JSON을 찾을 수 없습니다: {report_path}")
+        archive_payload = build_report_archive_payload(
+            report_path.read_text(encoding="utf-8"),
+            source_payload,
+            report_path.name,
+        )
+        result = upload_dashboard_payload(
+            archive_payload,
+            self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
+            self.env.get("WATCHDOG_UPLOAD_TOKEN"),
+        )
+        logger.info("Report synced: %s", result)
+        return archive_payload
 
     def collect_news_risks(self, output_path: Path | None = None, sync_dashboard: bool = False) -> Dict[str, object]:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
