@@ -22,7 +22,7 @@ export default async function RiskPage() {
   ]);
 
   if (!v1 && !v2) {
-    return <EmptyRiskPage />;
+    return newsRiskPayload ? <NewsOnlyRiskPage newsRisk={buildNewsRiskView(newsRiskPayload)} /> : <EmptyRiskPage />;
   }
 
   const view = buildDashboardView(v1, v2);
@@ -32,6 +32,32 @@ export default async function RiskPage() {
       risk={buildRiskView(view)}
       newsRisk={newsRiskPayload ? buildNewsRiskView(newsRiskPayload) : null}
     />
+  );
+}
+
+function NewsOnlyRiskPage({ newsRisk }: { newsRisk: NewsRiskView }) {
+  return (
+    <div className="app-frame">
+      <DesktopTopNavigation active="risk" />
+      <DesktopSideNavigation active="risk" />
+      <main className="dashboard-main risk-main">
+        <MobileHeader />
+        <header className="risk-title">
+          <div>
+            <span>RISK MONITOR</span>
+            <h1>리스크</h1>
+            <p>자산 현황 동기화를 기다리는 동안 최신 뉴스 기반 잠재 리스크를 표시합니다.</p>
+          </div>
+          <div className="risk-posture medium">
+            <span>자산 데이터 상태</span>
+            <strong>동기화 필요</strong>
+            <small>뉴스 리스크는 독립적으로 갱신됩니다.</small>
+          </div>
+        </header>
+        <NewsRiskSection newsRisk={newsRisk} />
+      </main>
+      <MobileBottomNavigation active="risk" />
+    </div>
   );
 }
 
