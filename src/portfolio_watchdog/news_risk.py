@@ -229,7 +229,14 @@ def _priority_score(
         reasons.append("독립 출처 2개 (+1)")
     else:
         reasons.append(f"독립 출처 {source_count}개")
-    reasons.append(f"반복 기사 {article_count}건")
+    if article_count >= 3:
+        score += 2
+        reasons.append(f"반복 기사 {article_count}건 (+2)")
+    elif article_count == 2:
+        score += 1
+        reasons.append("반복 기사 2건 (+1)")
+    else:
+        reasons.append("반복 기사 1건")
     if source_quality == 2:
         score += 2
         reasons.append("1차 출처 포함 (+2)")

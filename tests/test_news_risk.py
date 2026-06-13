@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 
 from portfolio_watchdog.models import AssetEvaluation, NewsItem, PortfolioEvaluation
@@ -55,6 +56,10 @@ def _news(
         impact=impact,
         reason="",
     )
+
+
+def _score_from_reasons(reasons: list[str]) -> int:
+    return sum(int(match.group(1)) for reason in reasons if (match := re.search(r"\(\+(\d+)\)", reason)))
 
 
 def test_risk_news_queries_cover_required_market_risk_categories() -> None:
@@ -116,7 +121,7 @@ def test_event_merge_counts_independent_sources_and_records_score_reasons() -> N
     assert "관련 비중 15% 이상 (+2)" in risk["priority_reasons"]
     assert "직접 관련 자산 (+2)" in risk["priority_reasons"]
     assert "독립 출처 3개 이상 (+2)" in risk["priority_reasons"]
-    assert "반복 기사 4건" in risk["priority_reasons"]
+    assert "반복 기사 4건 (+2)" in risk["priority_reasons"]
     assert "1차 출처 포함 (+2)" in risk["priority_reasons"]
     assert "강한 위험 신호 (+2)" in risk["priority_reasons"]
     assert "24시간 이내 신규 (+1)" in risk["priority_reasons"]
@@ -126,8 +131,8 @@ def test_event_merge_counts_independent_sources_and_records_score_reasons() -> N
     assert all(link["url"].startswith(("http://", "https://")) for link in risk["source_links"])
 
 
-def test_repeated_articles_are_recorded_without_inflating_independent_source_score() -> None:
-    payload = build_news_risk_payload(
+def test_repeated_articles_add_one_point_separately_from_independent_sources() -> None:
+    repeated_payload = build_news_risk_payload(
         [
             _news("비트코인 거래 규제 강화", related_assets=["BTC"], url="https://example.com/a"),
             _news("BTC 거래 규제 본격화", related_assets=["BTC"], url="https://example.com/b"),
@@ -135,12 +140,18 @@ def test_repeated_articles_are_recorded_without_inflating_independent_source_sco
         _portfolio(),
         generated_at=NOW,
     )
+    single_payload = build_news_risk_payload(
+        [_news("비트코인 거래 규제 강화", related_assets=["BTC"], url="https://example.com/a")],
+        _portfolio(),
+        generated_at=NOW,
+    )
 
-    risk = payload["direct_risks"][0]
-    assert risk["priority"] == "caution"
-    assert "반복 기사 2건" in risk["priority_reasons"]
-    assert "독립 출처 1개" in risk["priority_reasons"]
-    assert not any("(+" in reason for reason in risk["priority_reasons"] if reason.startswith(("독립 출처", "반복 기사")))
+    repeated = repeated_payload["direct_risks"][0]
+    single = single_payload["direct_risks"][0]
+    assert repeated["priority"] == single["priority"] == "caution"
+    assert "반복 기사 2건 (+1)" in repeated["priority_reasons"]
+    assert "독립 출처 1개" in repeated["priority_reasons"]
+    assert _score_from_reasons(repeated["priority_reasons"]) == _score_from_reasons(single["priority_reasons"]) + 1
 
 
 def test_contract_uses_allowed_categories_link_objects_and_freshness_values() -> None:
