@@ -206,6 +206,35 @@ def test_unconnected_news_is_excluded_and_equity_group_is_isa() -> None:
     assert payload["market_risks"] == []
 
 
+def test_market_risks_require_explainable_financial_or_held_group_evidence() -> None:
+    payload = build_news_risk_payload(
+        [
+            _news("의약품 규제 강화", impact="중립", url="https://example.com/pharma"),
+            _news("바이오 업종 급락", impact="중립", url="https://example.com/biotech"),
+            _news("증시 급락", impact="중립", url="https://example.com/market"),
+            _news("지정학 갈등 심화", impact="중립", url="https://example.com/geopolitics"),
+            _news("가상자산 거래소 규제 강화", impact="중립", url="https://example.com/crypto"),
+            _news("증권 거래 제한 규제 강화", impact="중립", url="https://example.com/securities"),
+            _news("거래소 규제 강화", impact="중립", url="https://example.com/exchange"),
+            _news("지정학 갈등으로 증시 변동성 확대", impact="중립", url="https://example.com/stocks"),
+            _news("금융시장 유동성 악화", impact="중립", url="https://example.com/liquidity"),
+        ],
+        _portfolio(),
+        generated_at=NOW,
+    )
+
+    groups_by_title = {risk["title"]: risk["related_asset_groups"] for risk in payload["market_risks"]}
+    assert "의약품 규제 강화" not in groups_by_title
+    assert "바이오 업종 급락" not in groups_by_title
+    assert groups_by_title["증시 급락"] == ["isa"]
+    assert "지정학 갈등 심화" not in groups_by_title
+    assert groups_by_title["가상자산 거래소 규제 강화"] == ["coin"]
+    assert groups_by_title["증권 거래 제한 규제 강화"] == ["isa"]
+    assert groups_by_title["거래소 규제 강화"] == ["coin", "isa"]
+    assert groups_by_title["지정학 갈등으로 증시 변동성 확대"] == ["isa"]
+    assert groups_by_title["금융시장 유동성 악화"] == ["coin", "isa"]
+
+
 def test_direct_negative_news_is_candidate_without_keyword_and_old_news_is_excluded() -> None:
     payload = build_news_risk_payload(
         [

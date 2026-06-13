@@ -22,16 +22,11 @@ _RISK_SIGNALS: Sequence[Tuple[str, str, Sequence[str], bool]] = (
     ("market", "하락", ("하락", "약세", "둔화", "우려", "불안", "압박", "조정"), False),
 )
 
-_MARKET_GROUPS: Dict[str, Sequence[str]] = {
-    "rates": ("coin", "isa"),
-    "inflation": ("coin", "isa"),
-    "fx": ("coin", "isa"),
-    "economy": ("isa",),
-    "regulation": ("coin", "isa"),
-    "geopolitics": ("coin", "isa"),
-    "liquidity": ("coin", "isa"),
-    "market": ("coin", "isa"),
-}
+_COIN_MARKET_KEYWORDS = ("가상자산", "암호화폐", "비트코인", "이더리움", "코인", "디파이")
+_ISA_MARKET_KEYWORDS = ("증권", "주식", "증시", "채권", "국채", "ETF", "나스닥", "S&P", "리츠")
+_BROAD_FINANCIAL_KEYWORDS = ("금융시장", "금융 시스템", "신용위험", "신용 위험", "자금유출", "자금 유출")
+_RATE_MARKET_KEYWORDS = ("금리", "국채", "채권", "중앙은행", "연준", "긴축")
+_FX_MARKET_KEYWORDS = ("환율", "달러", "통화 약세")
 
 _PRIMARY_SOURCE_MARKERS = (
     "금융위원회",
@@ -98,7 +93,7 @@ def build_news_risk_payload(
             related_groups = sorted({_payload_group(portfolio_assets[symbol].asset_type) for symbol in related_assets})
         else:
             scope = "market"
-            related_groups = sorted(set(_MARKET_GROUPS.get(category, ())) & portfolio_groups)
+            related_groups = _market_groups(category, item, portfolio_groups)
             if not related_groups:
                 continue
 
@@ -195,6 +190,26 @@ def _risk_signal(item: NewsItem) -> Optional[Tuple[str, str, bool]]:
         if any(_normalize(keyword) in text for keyword in keywords):
             matches.append((category, signal, strong))
     return max(matches, key=lambda match: match[2]) if matches else None
+
+
+def _market_groups(category: str, item: NewsItem, portfolio_groups: set[str]) -> List[str]:
+    text = _normalize(f"{item.title} {item.summary} {item.reason}")
+    groups = set()
+    if any(_normalize(keyword) in text for keyword in _COIN_MARKET_KEYWORDS):
+        groups.add("coin")
+    if any(_normalize(keyword) in text for keyword in _ISA_MARKET_KEYWORDS):
+        groups.add("isa")
+    if category == "market":
+        return sorted(groups & portfolio_groups)
+    if any(_normalize(keyword) in text for keyword in _BROAD_FINANCIAL_KEYWORDS):
+        groups.update(("coin", "isa"))
+    if category in {"rates", "inflation"} and any(_normalize(keyword) in text for keyword in _RATE_MARKET_KEYWORDS):
+        groups.update(("coin", "isa"))
+    if category == "fx" and any(_normalize(keyword) in text for keyword in _FX_MARKET_KEYWORDS):
+        groups.update(("coin", "isa"))
+    if category == "regulation" and not groups and any(keyword in text for keyword in ("금융", "거래소", "거래 제한", "거래제한")):
+        groups.update(("coin", "isa"))
+    return sorted(groups & portfolio_groups)
 
 
 def _priority_score(
