@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import {
   Brand,
   DesktopSideNavigation,
@@ -8,7 +10,14 @@ import {
 import { requireSession } from "@/lib/auth";
 import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
 import { formatDashboardDate } from "@/lib/format-date";
-import { getLatestDashboardPayloads } from "@/lib/storage";
+import { buildHomeInsights, type HomeInsights } from "@/lib/home-insights";
+import {
+  getLatestDashboardPayloads,
+  getLatestNewsRiskPayload,
+  getLatestOpinionPayload,
+  getReportIndex,
+  getReportPayload,
+} from "@/lib/storage";
 
 import { logoutAction } from "../login/actions";
 
@@ -16,16 +25,24 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   await requireSession();
-  const { v1, v2 } = await getLatestDashboardPayloads();
+  const [{ v1, v2 }, newsRisk, opinion, reportIndex] = await Promise.all([
+    getLatestDashboardPayloads(),
+    getLatestNewsRiskPayload(),
+    getLatestOpinionPayload(),
+    getReportIndex(),
+  ]);
 
   if (!v1 && !v2) {
     return <EmptyDashboardPage />;
   }
 
-  return <DashboardHome view={buildDashboardView(v1, v2)} />;
+  const reportId = reportIndex.find((item) => item.schema_version === "dashboard_report_v2")?.report_id ?? reportIndex[0]?.report_id;
+  const report = reportId ? await getReportPayload(reportId) : null;
+
+  return <DashboardHome insights={buildHomeInsights(opinion, newsRisk, report)} view={buildDashboardView(v1, v2)} />;
 }
 
-function DashboardHome({ view }: { view: DashboardView }) {
+function DashboardHome({ view, insights }: { view: DashboardView; insights: HomeInsights }) {
   const cash = view.groups.find((group) => group.key === "cash");
 
   return (
@@ -86,10 +103,10 @@ function DashboardHome({ view }: { view: DashboardView }) {
 
         <section className="insight-grid">
           <AssetPanel view={view} />
-          <EmptyInsightPanel title="주요 경제 일정" description="연결된 실제 경제 일정 데이터가 없습니다." />
+          <NewsRiskPanel insight={insights.newsRisk} />
           <NewsPanel view={view} />
-          <EmptyInsightPanel title="리포트" description="웹에서 조회 가능한 리포트가 아직 없습니다." />
-          <EmptyInsightPanel title="투자 의견 및 논리" description="확정된 투자 의견이 아직 없습니다." wide />
+          <OpinionPanel insight={insights.opinion} />
+          <ReportPanel insight={insights.report} />
           <DataStatusPanel view={view} />
         </section>
 
@@ -273,6 +290,74 @@ function NewsPanel({ view }: { view: DashboardView }) {
   );
 }
 
+function NewsRiskPanel({ insight }: { insight: HomeInsights["newsRisk"] }) {
+  return (
+    <section className="surface home-risk-panel">
+      <PanelLinkHeading href="/risk" meta={insight ? `${insight.totalCount}건 · 신규 ${insight.newCount}건` : "분석 대기"} title="잠재 리스크" />
+      {insight ? (
+        <div className="home-risk-list">
+          {insight.items.map((item) => (
+            <article key={item.id}>
+              <span className={item.priority}>{item.priorityLabel}</span>
+              <div><strong>{item.title}</strong><p>{item.impact}</p></div>
+            </article>
+          ))}
+        </div>
+      ) : <EmptyState text="아직 업로드된 뉴스 잠재 리스크가 없습니다." />}
+    </section>
+  );
+}
+
+function OpinionPanel({ insight }: { insight: HomeInsights["opinion"] }) {
+  return (
+    <section className="surface home-opinion-panel">
+      <PanelLinkHeading href="/opinion" meta={insight ? `${formatDate(insight.generatedAt)} 기준` : "분석 대기"} title="Codex 투자 의견" />
+      {insight ? (
+        <>
+          <div className={`home-opinion-posture ${insight.posture}`}>
+            <span>포트폴리오 판단</span>
+            <strong>{insight.postureLabel}</strong>
+            <p>{insight.summary}</p>
+          </div>
+          <div className="home-opinion-counts">
+            <span><b className="buy">{insight.counts.buy}</b>매수</span>
+            <span><b className="sell">{insight.counts.sell}</b>매도</span>
+            <span><b className="observe">{insight.counts.observe}</b>관찰 필요</span>
+          </div>
+          <div className="home-opinion-list">
+            {insight.items.map((item) => (
+              <article key={item.id}>
+                <span className={item.action}>{item.actionLabel}</span>
+                <div><strong>{item.name} <small>{item.symbol}</small></strong><p>{item.thesis}</p></div>
+              </article>
+            ))}
+          </div>
+        </>
+      ) : <EmptyState text="아직 생성된 Codex 투자 의견이 없습니다." />}
+    </section>
+  );
+}
+
+function ReportPanel({ insight }: { insight: HomeInsights["report"] }) {
+  return (
+    <section className="surface home-report-panel">
+      <PanelLinkHeading href={insight ? `/reports?id=${encodeURIComponent(insight.id)}` : "/reports"} meta={insight?.kindLabel ?? "리포트 대기"} title="최신 리서치" />
+      {insight ? (
+        <>
+          <div className={`home-report-stance ${insight.stance ?? "source"}`}>
+            <span>{insight.stanceLabel}</span>
+            <b>{insight.validationValid ? "QC 통과" : "검증 필요"}</b>
+          </div>
+          <h3>{insight.title}</h3>
+          <strong>{insight.headline}</strong>
+          <ul>{insight.summaryPoints.map((item) => <li key={item}>{item}</li>)}</ul>
+          <small>{formatDate(insight.generatedAt)} 생성</small>
+        </>
+      ) : <EmptyState text="웹에서 조회 가능한 완성 리포트가 아직 없습니다." />}
+    </section>
+  );
+}
+
 function DataStatusPanel({ view }: { view: DashboardView }) {
   return (
     <section className="surface status-panel">
@@ -291,17 +376,12 @@ function DataStatusPanel({ view }: { view: DashboardView }) {
   );
 }
 
-function EmptyInsightPanel({ title, description, wide = false }: { title: string; description: string; wide?: boolean }) {
-  return (
-    <section className={`surface empty-insight ${wide ? "wide" : ""}`}>
-      <PanelHeading title={title} meta="" />
-      <EmptyState text={description} />
-    </section>
-  );
-}
-
 function PanelHeading({ title, meta }: { title: string; meta: string }) {
   return <header className="panel-heading"><h2>{title}</h2>{meta ? <span>{meta}</span> : null}</header>;
+}
+
+function PanelLinkHeading({ title, meta, href }: { title: string; meta: string; href: string }) {
+  return <header className="panel-heading"><h2>{title}</h2><Link href={href}>{meta}</Link></header>;
 }
 
 function EmptyState({ text }: { text: string }) {
