@@ -1,8 +1,9 @@
 import { verifyBearerToken } from "@/lib/auth-core";
 import { validateDashboardPayload } from "@/lib/dashboard-payload";
 import { validateNewsRiskPayload } from "@/lib/news-risk-payload";
+import { validateOpinionPayload } from "@/lib/opinion-payload";
 import { validateReportPayload } from "@/lib/report-payload";
-import { saveLatestDashboardPayload, saveLatestNewsRiskPayload, saveReportPayload } from "@/lib/storage";
+import { saveLatestDashboardPayload, saveLatestNewsRiskPayload, saveLatestOpinionPayload, saveReportPayload } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,11 @@ export async function POST(request: Request) {
   if (validateNewsRiskPayload(body)) {
     await saveLatestNewsRiskPayload(body);
     return Response.json({ ok: true, generated_at: body.generated_at });
+  }
+
+  if (validateOpinionPayload(body)) {
+    await saveLatestOpinionPayload(body);
+    return Response.json({ ok: true, generated_at: body.generated_at, opinion_id: body.opinion_id });
   }
 
   if (validateReportPayload(body)) {

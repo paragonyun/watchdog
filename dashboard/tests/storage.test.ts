@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { NEWS_RISK_BLOB_KEY, REPORT_INDEX_BLOB_KEY, blobKeyForPayload, getLatestDashboardData, reportBlobKey, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
+import { NEWS_RISK_BLOB_KEY, OPINION_BLOB_KEY, REPORT_INDEX_BLOB_KEY, blobKeyForPayload, getLatestDashboardData, reportBlobKey, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
 
 const validPayload = {
   schema_version: "dashboard_payload_v1",
@@ -49,6 +49,10 @@ test("v1 and v2 payloads use separate blob keys", () => {
 
 test("news risk payload uses an independent private blob key", () => {
   assert.equal(NEWS_RISK_BLOB_KEY, "dashboard/news-risk-latest.json");
+});
+
+test("Codex opinion payload uses an independent private blob key", () => {
+  assert.equal(OPINION_BLOB_KEY, "dashboard/opinion-latest.json");
 });
 
 test("report payloads use a safe private archive path", () => {

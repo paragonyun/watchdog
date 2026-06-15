@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import math
 import platform
@@ -10,6 +11,7 @@ from typing import Dict, List, Optional
 from .config import AppConfig, AssetConfig
 from .dashboard_data import build_dashboard_payload, build_dashboard_payload_v2, load_dashboard_source_payload, upload_dashboard_payload
 from .history import HistoryRepository
+from .investment_opinion import build_investment_opinion_payload
 from .ledger.import_history import import_history_json
 from .ledger.ingestion import add_manual_cash_flow
 from .ledger.models import AccountSnapshot, AssetSnapshot, LedgerEvent
@@ -58,6 +60,7 @@ from .providers.upbit import (
 from .providers.news_provider import NewsProvider
 from .report_data import build_portfolio_report_source, build_report_caption, build_report_payload, build_weekly_report_source_from_payload, load_report_payload_for_path, write_report_artifact
 from .report_archive import build_report_archive_payload
+from .research_report import build_research_report_payload
 from .report_validation import require_valid_report_payload
 from .reports import build_asset_status_report, build_news_report, build_portfolio_report
 from .repositories.file_snapshot_repository import FileSnapshotRepository
@@ -827,14 +830,19 @@ class PortfolioWatchdogApp:
             raise FileNotFoundError(f"리포트 동기화 원본을 찾을 수 없습니다: {report_path}")
         if not report_path.is_file():
             raise ValueError(f"리포트 동기화 경로가 파일이 아닙니다: {report_path}")
-        source_payload = load_report_payload_for_path(report_path)
-        if source_payload is None:
-            raise ValueError(f"리포트 payload JSON을 찾을 수 없습니다: {report_path}")
-        archive_payload = build_report_archive_payload(
-            report_path.read_text(encoding="utf-8"),
-            source_payload,
-            report_path.name,
-        )
+        if report_path.suffix.lower() == ".json":
+            archive_payload = build_research_report_payload(
+                json.loads(report_path.read_text(encoding="utf-8"))
+            )
+        else:
+            source_payload = load_report_payload_for_path(report_path)
+            if source_payload is None:
+                raise ValueError(f"리포트 payload JSON을 찾을 수 없습니다: {report_path}")
+            archive_payload = build_report_archive_payload(
+                report_path.read_text(encoding="utf-8"),
+                source_payload,
+                report_path.name,
+            )
         result = upload_dashboard_payload(
             archive_payload,
             self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
@@ -842,6 +850,24 @@ class PortfolioWatchdogApp:
         )
         logger.info("Report synced: %s", result)
         return archive_payload
+
+    def sync_opinions(self, path: Path) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        opinion_path = Path(path)
+        if not opinion_path.exists():
+            raise FileNotFoundError(f"Codex opinion JSON not found: {opinion_path}")
+        if not opinion_path.is_file():
+            raise ValueError(f"Codex opinion path is not a file: {opinion_path}")
+        payload = build_investment_opinion_payload(
+            json.loads(opinion_path.read_text(encoding="utf-8"))
+        )
+        result = upload_dashboard_payload(
+            payload,
+            self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
+            self.env.get("WATCHDOG_UPLOAD_TOKEN"),
+        )
+        logger.info("Codex opinions synced: %s", result)
+        return payload
 
     def collect_news_risks(self, output_path: Path | None = None, sync_dashboard: bool = False) -> Dict[str, object]:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
