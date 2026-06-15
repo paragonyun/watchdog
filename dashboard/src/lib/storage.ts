@@ -8,6 +8,7 @@ import {
   type DashboardPayloadV2,
 } from "./dashboard-payload";
 import { validateNewsRiskPayload, type NewsRiskPayload } from "./news-risk-payload";
+import { validateOpinionPayload, type OpinionPayload } from "./opinion-payload";
 import {
   toReportIndexItem,
   validReportId,
@@ -20,6 +21,7 @@ import {
 const BLOB_KEY = "dashboard/latest.json";
 const V2_BLOB_KEY = "dashboard/v2-latest.json";
 export const NEWS_RISK_BLOB_KEY = "dashboard/news-risk-latest.json";
+export const OPINION_BLOB_KEY = "dashboard/opinion-latest.json";
 export const REPORT_INDEX_BLOB_KEY = "dashboard/reports/index.json";
 
 export type DashboardDataSource = "blob" | "sample" | "empty";
@@ -98,6 +100,21 @@ export async function getLatestNewsRiskPayload(): Promise<NewsRiskPayload | null
 export async function saveLatestNewsRiskPayload(payload: NewsRiskPayload): Promise<void> {
   const { put } = await import("@vercel/blob");
   await put(NEWS_RISK_BLOB_KEY, JSON.stringify(payload), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
+export async function getLatestOpinionPayload(): Promise<OpinionPayload | null> {
+  const value = await readBlobPayload(OPINION_BLOB_KEY);
+  return validateOpinionPayload(value) ? value : null;
+}
+
+export async function saveLatestOpinionPayload(payload: OpinionPayload): Promise<void> {
+  const { put } = await import("@vercel/blob");
+  await put(OPINION_BLOB_KEY, JSON.stringify(payload), {
     access: "private",
     addRandomSuffix: false,
     allowOverwrite: true,

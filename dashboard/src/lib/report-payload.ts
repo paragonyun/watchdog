@@ -1,6 +1,6 @@
 import { hasForbiddenCloudField, type AssetSummary } from "./dashboard-payload";
 
-export type ReportPayload = {
+export type LegacyReportPayload = {
   schema_version: "dashboard_report_v1";
   report_id: string;
   generated_at: string;
@@ -22,28 +22,60 @@ export type ReportPayload = {
   };
 };
 
+export type ResearchReportPayload = Omit<LegacyReportPayload, "schema_version" | "document_status" | "sections"> & {
+  schema_version: "dashboard_report_v2";
+  document_status: "final";
+  subtitle: string;
+  stance: "positive" | "neutral" | "cautious";
+  executive_summary: string[];
+  key_metrics: Array<{ label: string; value: string; context: string; tone: "positive" | "neutral" | "negative" }>;
+  investment_thesis: {
+    headline: string;
+    body: string;
+    facts: string[];
+    interpretations: string[];
+    estimates: string[];
+  };
+  asset_views: Array<{
+    symbol: string;
+    name: string;
+    action: "buy" | "sell" | "observe";
+    thesis: string;
+    catalysts: string[];
+    risks: string[];
+  }>;
+  scenarios: Array<{ name: string; probability: string; trigger: string; impact: string; response: string }>;
+  risk_watchlist: string[];
+  conclusion: string;
+};
+
+export type ReportPayload = LegacyReportPayload | ResearchReportPayload;
+
 export type ReportIndexItem = Pick<
   ReportPayload,
   "report_id" | "generated_at" | "report_kind" | "title" | "document_status" | "summary"
->;
+> & { schema_version?: ReportPayload["schema_version"] };
 
 const reportIdPattern = /^(portfolio|weekly)-\d{8}-\d{4}$/;
 
 export function validateReportPayload(value: unknown): value is ReportPayload {
   if (!isRecord(value) || hasForbiddenCloudField(value)) return false;
   return (
-    value.schema_version === "dashboard_report_v1" &&
+    (value.schema_version === "dashboard_report_v1" || value.schema_version === "dashboard_report_v2") &&
     validReportId(value.report_id) &&
+    (value.schema_version === undefined || value.schema_version === "dashboard_report_v1" || value.schema_version === "dashboard_report_v2") &&
     isIsoDatetime(value.generated_at) &&
     (value.report_kind === "portfolio" || value.report_kind === "weekly") &&
     nonEmptyString(value.title) &&
     (value.document_status === "source" || value.document_status === "final") &&
     validSummary(value.summary) &&
-    Array.isArray(value.sections) &&
-    value.sections.length > 0 &&
-    value.sections.every(validSection) &&
-    validAppendix(value.appendix)
+    validAppendix(value.appendix) &&
+    (value.schema_version === "dashboard_report_v1" ? validLegacyBody(value) : validResearchBody(value))
   );
+}
+
+export function isResearchReport(payload: ReportPayload): payload is ResearchReportPayload {
+  return payload.schema_version === "dashboard_report_v2";
 }
 
 export function validateReportIndexItem(value: unknown): value is ReportIndexItem {
@@ -64,6 +96,7 @@ export function validReportId(value: unknown): value is string {
 
 export function toReportIndexItem(payload: ReportPayload): ReportIndexItem {
   return {
+    schema_version: payload.schema_version,
     report_id: payload.report_id,
     generated_at: payload.generated_at,
     report_kind: payload.report_kind,
@@ -90,6 +123,51 @@ function validSection(value: unknown): boolean {
     stringList(value.lines) &&
     value.lines.every((line) => line.trim().length > 0)
   );
+}
+
+function validLegacyBody(value: Record<string, unknown>): boolean {
+  return Array.isArray(value.sections) && value.sections.length > 0 && value.sections.every(validSection);
+}
+
+function validResearchBody(value: Record<string, unknown>): boolean {
+  return (
+    value.document_status === "final" &&
+    nonEmptyString(value.subtitle) &&
+    (value.stance === "positive" || value.stance === "neutral" || value.stance === "cautious") &&
+    nonEmptyStringList(value.executive_summary) &&
+    Array.isArray(value.key_metrics) &&
+    value.key_metrics.length > 0 &&
+    value.key_metrics.every(validKeyMetric) &&
+    validThesis(value.investment_thesis) &&
+    Array.isArray(value.asset_views) &&
+    value.asset_views.length > 0 &&
+    value.asset_views.every(validAssetView) &&
+    Array.isArray(value.scenarios) &&
+    value.scenarios.length > 0 &&
+    value.scenarios.every(validScenario) &&
+    nonEmptyStringList(value.risk_watchlist) &&
+    nonEmptyString(value.conclusion)
+  );
+}
+
+function validKeyMetric(value: unknown): boolean {
+  return isRecord(value) && nonEmptyString(value.label) && nonEmptyString(value.value) && nonEmptyString(value.context) &&
+    (value.tone === "positive" || value.tone === "neutral" || value.tone === "negative");
+}
+
+function validThesis(value: unknown): boolean {
+  return isRecord(value) && nonEmptyString(value.headline) && nonEmptyString(value.body) &&
+    nonEmptyStringList(value.facts) && nonEmptyStringList(value.interpretations) && nonEmptyStringList(value.estimates);
+}
+
+function validAssetView(value: unknown): boolean {
+  return isRecord(value) && nonEmptyString(value.symbol) && nonEmptyString(value.name) && nonEmptyString(value.thesis) &&
+    (value.action === "buy" || value.action === "sell" || value.action === "observe") &&
+    nonEmptyStringList(value.catalysts) && nonEmptyStringList(value.risks);
+}
+
+function validScenario(value: unknown): boolean {
+  return isRecord(value) && ["name", "probability", "trigger", "impact", "response"].every((key) => nonEmptyString(value[key]));
 }
 
 function validAppendix(value: unknown): boolean {
@@ -137,6 +215,10 @@ function nonEmptyString(value: unknown): value is string {
 
 function stringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function nonEmptyStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(nonEmptyString);
 }
 
 function finiteNumber(value: unknown): value is number {

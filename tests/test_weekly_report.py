@@ -146,6 +146,22 @@ def test_sync_report_uploads_privacy_safe_archive(monkeypatch, tmp_path) -> None
     assert calls[0][1:] == ("https://example.com/api/upload", "token")
 
 
+def test_sync_report_uploads_completed_research_json(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={"WATCHDOG_DASHBOARD_UPLOAD_URL": "https://example.com/api/upload", "WATCHDOG_UPLOAD_TOKEN": "token"})
+    report = tmp_path / "completed-research.json"
+    report.write_text(
+        '{"schema_version":"dashboard_report_v2","report_id":"portfolio-20260615-1200","generated_at":"2026-06-15T12:00:00+09:00","report_kind":"portfolio","title":"포트폴리오 전략 리포트","subtitle":"선택과 집중","document_status":"final","stance":"cautious","summary":{"total_value_krw":1000,"change_krw":0,"change_pct":0,"validation_valid":true},"executive_summary":["핵심 자산 유지"],"key_metrics":[{"label":"누적 TWR","value":"+1.0%","context":"확정","tone":"positive"}],"investment_thesis":{"headline":"선별 대응","body":"현재 데이터를 평가했습니다.","facts":["ISA 중심"],"interpretations":["변동성 확대 가능"],"estimates":["현금 완충 예상"]},"asset_views":[{"symbol":"BTC","name":"비트코인","action":"observe","thesis":"유동성 확인","catalysts":["ETF 순유입"],"risks":["거래대금 감소"]}],"scenarios":[{"name":"기준","probability":"중간","trigger":"금리 안정","impact":"완만한 회복","response":"현 비중 유지"}],"risk_watchlist":["변동성 확대"],"conclusion":"현금 완충력을 유지합니다.","appendix":{"asset_groups":{"coin":200,"equity":700,"cash":100},"assets":[],"provider_status":[],"validation_issues":[]}}',
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(app_module, "upload_dashboard_payload", lambda payload, endpoint, token: calls.append((payload, endpoint, token)) or {"ok": True})
+
+    payload = watchdog.sync_report(report)
+
+    assert payload["schema_version"] == "dashboard_report_v2"
+    assert calls[0][1:] == ("https://example.com/api/upload", "token")
+
+
 def test_send_report_document_missing_file_error(tmp_path) -> None:
     watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
     missing = tmp_path / "missing.md"

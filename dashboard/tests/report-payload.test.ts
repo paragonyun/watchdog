@@ -54,3 +54,35 @@ test("rejects unsafe report ids and sensitive nested fields", () => {
     false,
   );
 });
+
+test("accepts completed analyst-style v2 reports and rejects source documents", () => {
+  const v2 = {
+    ...report,
+    schema_version: "dashboard_report_v2",
+    subtitle: "변동성 확대 구간의 선택과 집중",
+    stance: "cautious",
+    executive_summary: ["핵심 자산은 유지하고 신규 위험 노출은 선별합니다."],
+    key_metrics: [{ label: "누적 TWR", value: "+8.4%", context: "벤치마크 대비 +4.2%p", tone: "positive" }],
+    investment_thesis: {
+      headline: "수익 기여와 위험 집중도를 함께 관리합니다.",
+      body: "현재 데이터와 주요 촉매를 바탕으로 판단했습니다.",
+      facts: ["ISA가 자산의 중심입니다."],
+      interpretations: ["시장 조정 시 변동성이 확대될 수 있습니다."],
+      estimates: ["현금이 완충 역할을 할 전망입니다."],
+    },
+    asset_views: [{
+      symbol: "BTC",
+      name: "비트코인",
+      action: "observe",
+      thesis: "유동성 확인이 우선입니다.",
+      catalysts: ["ETF 순유입 회복"],
+      risks: ["거래대금 감소"],
+    }],
+    scenarios: [{ name: "기준", probability: "중간", trigger: "금리 안정", impact: "완만한 회복", response: "현 비중 유지" }],
+    risk_watchlist: ["코인 변동성 확대"],
+    conclusion: "현금 완충력을 보존합니다.",
+  };
+
+  assert.equal(validateReportPayload(v2), true);
+  assert.equal(validateReportPayload({ ...v2, document_status: "source" }), false);
+});
