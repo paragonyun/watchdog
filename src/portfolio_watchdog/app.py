@@ -247,6 +247,22 @@ def _safe_provider_status(
     ]
 
 
+def _refresh_step(
+    name: str,
+    status: str,
+    payload: Dict[str, object] | None = None,
+    path: Path | None = None,
+) -> Dict[str, object]:
+    step: Dict[str, object] = {"name": name, "status": status}
+    if payload is not None:
+        schema = payload.get("schema_version")
+        if isinstance(schema, str):
+            step["schema_version"] = schema
+    if path is not None:
+        step["path"] = str(path)
+    return step
+
+
 class PortfolioWatchdogApp:
     def __init__(self, config: AppConfig, env: Dict[str, str], use_llm_news: bool = True) -> None:
         self.config = config
@@ -346,8 +362,133 @@ class PortfolioWatchdogApp:
                 payload,
                 self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
                 self.env.get("WATCHDOG_UPLOAD_TOKEN"),
-            )
+        )
         return payload
+
+    def refresh_dashboard(self, sync_codex: bool = True) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        result: Dict[str, object] = {
+            "schema_version": "dashboard_refresh_v1",
+            "generated_at": _utc_now().isoformat(),
+            "steps": [],
+        }
+        steps = result["steps"]
+        assert isinstance(steps, list)
+
+        ledger_payload = self.sync_ledger(sync_dashboard=True)
+        steps.append(_refresh_step("ledger", "completed", ledger_payload))
+
+        news_payload = self.collect_news_risks(sync_dashboard=True)
+        steps.append(_refresh_step("news_risks", "completed", news_payload))
+
+        if not sync_codex:
+            logger.info("Dashboard refresh completed without Codex artifact sync")
+            return result
+
+        self._sync_optional_codex_artifacts(steps)
+        logger.info("Dashboard refresh completed: %s", result)
+        return result
+
+    def prepare_codex_inputs(self) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        ledger_payload = self.sync_ledger(sync_dashboard=True)
+        news_payload = self.collect_news_risks(sync_dashboard=True)
+        report_source = self.create_portfolio_report_source()
+        payload = {
+            "schema_version": "codex_dashboard_inputs_v1",
+            "generated_at": _utc_now().isoformat(),
+            "inputs": {
+                "dashboard_v2": str(self.ledger_path.parent / "dashboard_v2_latest.json"),
+                "news_risk": str(self._news_risk_output_path()),
+                "portfolio_report_source": str(report_source),
+            },
+            "expected_outputs": {
+                "news_risk": str(self._codex_news_risk_path()),
+                "opinion": str(self._codex_opinion_path()),
+                "calendar": str(self._codex_calendar_path()),
+                "research_report": str(self._codex_report_path()),
+            },
+            "latest_payloads": {
+                "dashboard_schema": ledger_payload.get("schema_version"),
+                "news_risk_schema": news_payload.get("schema_version"),
+            },
+            "instructions": [
+                "Create codex_news_risk_v1 at expected_outputs.news_risk when deeper news-risk judgment is needed.",
+                "Create codex_investment_opinion_v1 at expected_outputs.opinion for buy/sell/observe decisions.",
+                "Create codex_economic_calendar_v1 at expected_outputs.calendar for upcoming macro events.",
+                "Create dashboard_report_v2 at expected_outputs.research_report for the completed analyst-style report.",
+                "Then run refresh-dashboard to validate and upload available outputs.",
+            ],
+        }
+        path = self._codex_inputs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Codex input manifest created: %s", path)
+        return payload
+
+    def _sync_optional_codex_artifacts(self, steps: List[Dict[str, object]]) -> None:
+        codex_news = self._codex_news_risk_path()
+        if codex_news.exists():
+            steps.append(_refresh_step("codex_news_risks", "completed", self.merge_news_risks(codex_news, sync_dashboard=True)))
+        else:
+            steps.append(_refresh_step("codex_news_risks", "skipped", path=codex_news))
+
+        opinion = self._codex_opinion_path()
+        if opinion.exists():
+            steps.append(_refresh_step("opinion", "completed", self.sync_opinions(opinion)))
+        else:
+            steps.append(_refresh_step("opinion", "skipped", path=opinion))
+
+        calendar = self._codex_calendar_path()
+        if calendar.exists():
+            steps.append(_refresh_step("calendar", "completed", self.sync_calendar(calendar)))
+        else:
+            steps.append(_refresh_step("calendar", "skipped", path=calendar))
+
+        report = self._latest_codex_report_path()
+        if report is not None:
+            steps.append(_refresh_step("research_report", "completed", self.sync_report(report), path=report))
+        else:
+            steps.append(_refresh_step("research_report", "skipped", path=self._codex_report_path()))
+
+    def _codex_workspace_path(self) -> Path:
+        return Path(self.config.snapshot.path).parent
+
+    def _codex_inputs_path(self) -> Path:
+        return self._codex_workspace_path() / "codex_dashboard_inputs_latest.json"
+
+    def _codex_news_risk_path(self) -> Path:
+        return self._codex_workspace_path() / "codex_news_risk.json"
+
+    def _codex_opinion_path(self) -> Path:
+        return self._codex_workspace_path() / "codex_investment_opinion.json"
+
+    def _codex_calendar_path(self) -> Path:
+        return self._codex_workspace_path() / "economic_calendar.json"
+
+    def _codex_report_path(self) -> Path:
+        return Path("reports") / "dashboard_report_v2_latest.json"
+
+    def _latest_codex_report_path(self) -> Path | None:
+        preferred = self._codex_report_path()
+        if preferred.exists():
+            return preferred
+        reports_dir = preferred.parent
+        if not reports_dir.exists():
+            return None
+        candidates = sorted(
+            reports_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in candidates:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if data.get("schema_version") == "dashboard_report_v2":
+                return path
+        return None
 
     def _sync_ledger_payload(self) -> Dict[str, object]:
         now = _as_utc(_utc_now())

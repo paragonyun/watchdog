@@ -110,8 +110,14 @@ node -e "console.log(require('crypto').createHash('sha256').update('원하는비
 python -m portfolio_watchdog collect-news-risks --sync-dashboard
 python -m portfolio_watchdog merge-news-risks --path snapshots/codex_news_risk.json --sync-dashboard
 python -m portfolio_watchdog sync-news-risks --path snapshots/news_risk_latest.json
+python -m portfolio_watchdog refresh-dashboard
+python -m portfolio_watchdog prepare-codex-inputs
 python -m portfolio_watchdog install-schedule
 ```
+
+`refresh-dashboard`는 자산 원장 동기화, 뉴스 리스크 수집, 준비된 Codex 산출물 업로드를 한 번에 실행합니다. 기본 Codex 산출물 위치는 `snapshots/codex_news_risk.json`, `snapshots/codex_investment_opinion.json`, `snapshots/economic_calendar.json`, `reports/dashboard_report_v2_latest.json`입니다. Codex 산출물을 건너뛰려면 `--skip-codex`를 붙입니다.
+
+`prepare-codex-inputs`는 최신 자산/뉴스 리스크/포트폴리오 리포트 원본을 만들고, Codex가 채워야 할 출력 파일 위치를 `snapshots/codex_dashboard_inputs_latest.json`에 기록합니다. 이 명령은 OpenAI API를 직접 호출하지 않습니다.
 
 뉴스 RSS 수집과 자산 API 동기화는 독립적으로 실패 처리됩니다. 뉴스 수집 실패가 자산 현황 표시를 막지 않고, 자산 API 실패가 기존 뉴스 리스크 파일을 삭제하지 않습니다. 클라우드에는 요약된 리스크만 Private Blob `dashboard/news-risk-latest.json`에 저장하며 뉴스 원문, 수량, 평단, 계좌 식별자, API 키는 업로드하지 않습니다.
 

@@ -36,6 +36,9 @@ def test_build_parser_keeps_existing_commands_and_adds_ledger_commands() -> None
     assert parser.parse_args(["run"]).command == "run"
     assert parser.parse_args(["sync-ledger"]).command == "sync-ledger"
     assert parser.parse_args(["sync-ledger", "--sync-dashboard"]).sync_dashboard is True
+    assert parser.parse_args(["refresh-dashboard"]).command == "refresh-dashboard"
+    assert parser.parse_args(["refresh-dashboard", "--skip-codex"]).skip_codex is True
+    assert parser.parse_args(["prepare-codex-inputs"]).command == "prepare-codex-inputs"
     assert parser.parse_args(["performance-summary"]).command == "performance-summary"
     args = parser.parse_args(
         [
@@ -139,6 +142,40 @@ def test_main_routes_sync_ledger_dashboard_option(monkeypatch, tmp_path) -> None
     cli_module.main()
 
     assert calls == [True]
+
+
+def test_main_routes_dashboard_automation_commands(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            pass
+
+        def refresh_dashboard(self, sync_codex=True):
+            calls.append(("refresh_dashboard", sync_codex))
+            return {"schema_version": "dashboard_refresh_v1"}
+
+        def prepare_codex_inputs(self):
+            calls.append(("prepare_codex_inputs", None))
+            return {"schema_version": "codex_dashboard_inputs_v1"}
+
+    _patch_cli_runtime(monkeypatch, tmp_path, FakeApp)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["portfolio-watchdog", "refresh-dashboard", "--skip-codex"],
+    )
+
+    cli_module.main()
+
+    monkeypatch.setattr(sys, "argv", ["portfolio-watchdog", "prepare-codex-inputs"])
+
+    cli_module.main()
+
+    assert calls == [
+        ("refresh_dashboard", False),
+        ("prepare_codex_inputs", None),
+    ]
 
 
 def test_add_cash_flow_is_deterministically_idempotent(tmp_path) -> None:

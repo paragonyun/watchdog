@@ -15,13 +15,14 @@ def install_windows_schedule(runner: Runner | None = None) -> None:
         raise RuntimeError("Windows 작업 스케줄러 등록은 Windows에서만 지원합니다.")
     run = runner or _default_runner
     workdir = get_executable_root()
+    runner_path = _write_task_runner(workdir)
     tasks: List[TaskSpec] = [
         ("PortfolioWatchdogNewsHourly", "check-news", "HOURLY", "00:00", None),
         ("PortfolioWatchdogNewsRiskHourly", "collect-news-risks --sync-dashboard", "HOURLY", "00:10", None),
-        ("PortfolioWatchdogLedger0800", "sync-ledger --sync-dashboard", "DAILY", "08:00", None),
-        ("PortfolioWatchdogLedger1200", "sync-ledger --sync-dashboard", "DAILY", "12:00", None),
-        ("PortfolioWatchdogLedger1800", "sync-ledger --sync-dashboard", "DAILY", "18:00", None),
-        ("PortfolioWatchdogLedger2200", "sync-ledger --sync-dashboard", "DAILY", "22:00", None),
+        ("PortfolioWatchdogDashboard0800", "refresh-dashboard", "DAILY", "08:00", None),
+        ("PortfolioWatchdogDashboard1200", "refresh-dashboard", "DAILY", "12:00", None),
+        ("PortfolioWatchdogDashboard1800", "refresh-dashboard", "DAILY", "18:00", None),
+        ("PortfolioWatchdogDashboard2200", "refresh-dashboard", "DAILY", "22:00", None),
     ]
     for name, command, schedule, start_time, day in tasks:
         args: List[str] = [
@@ -30,7 +31,7 @@ def install_windows_schedule(runner: Runner | None = None) -> None:
             "/TN",
             name,
             "/TR",
-            _task_command(workdir, command),
+            _task_command(runner_path, command),
             "/SC",
             schedule,
             "/F",
@@ -45,15 +46,30 @@ def install_windows_schedule(runner: Runner | None = None) -> None:
         _update_windows_task_settings(name, run)
 
 
-def _task_command(workdir: Path, command: str) -> str:
-    return f'cmd /c cd /d "{workdir}" && {subprocess.list2cmdline(_runtime_command(command))}'
+def _write_task_runner(workdir: Path) -> Path:
+    runner = workdir / "watchdog-task.cmd"
+    runner.write_text(
+        "@echo off\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        f"{subprocess.list2cmdline(_runtime_base_command())} %*\r\n",
+        encoding="utf-8",
+    )
+    return runner
+
+
+def _task_command(runner_path: Path, command: str) -> str:
+    return subprocess.list2cmdline([str(runner_path), *command.split()])
 
 
 def _runtime_command(command: str) -> List[str]:
     command_args = command.split()
+    return [*_runtime_base_command(), *command_args]
+
+
+def _runtime_base_command() -> List[str]:
     if getattr(sys, "frozen", False):
-        return [sys.executable, *command_args]
-    return [sys.executable, "-m", "portfolio_watchdog", *command_args]
+        return [sys.executable]
+    return [sys.executable, "-m", "portfolio_watchdog"]
 
 
 def _update_windows_task_settings(task_name: str, runner: Runner) -> None:
@@ -73,4 +89,8 @@ def _powershell_quote(value: str) -> str:
 
 
 def _default_runner(args: Sequence[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(list(args), check=True, capture_output=True, text=True)
+    try:
+        return subprocess.run(list(args), check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise RuntimeError(f"Scheduled task command failed: {detail}") from exc

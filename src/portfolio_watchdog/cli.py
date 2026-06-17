@@ -15,12 +15,13 @@ logger = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portfolio Watchdog")
-    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "sync-calendar", "collect-news-risks", "merge-news-risks", "sync-news-risks", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
+    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "sync-calendar", "collect-news-risks", "merge-news-risks", "sync-news-risks", "refresh-dashboard", "prepare-codex-inputs", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
     parser.add_argument("--config", default=None, help="설정 파일 경로")
     parser.add_argument("--env", default=None, help="환경 변수 파일 경로")
     parser.add_argument("--path", default=None, help="리포트/메시지/대시보드 원본 파일 경로")
     parser.add_argument("--output", default=None, help="render-report-pdf/complete-report에서 생성할 PDF 파일 경로")
     parser.add_argument("--sync-dashboard", action="store_true", help="complete-report 실행 후 대시보드를 동기화")
+    parser.add_argument("--skip-codex", action="store_true", help="Skip optional Codex artifact sync in refresh-dashboard")
     parser.add_argument("--amount", type=float, default=None)
     parser.add_argument("--occurred-at", default=None)
     parser.add_argument("--memo", default=None)
@@ -128,6 +129,18 @@ def main() -> None:
     elif args.command == "sync-news-risks":
         try:
             app.sync_news_risks(Path(args.path))
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+    elif args.command == "refresh-dashboard":
+        try:
+            print(json.dumps(app.refresh_dashboard(sync_codex=not args.skip_codex), ensure_ascii=False, indent=2, default=str))
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+    elif args.command == "prepare-codex-inputs":
+        try:
+            print(json.dumps(app.prepare_codex_inputs(), ensure_ascii=False, indent=2, default=str))
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error("%s", exc)
             raise SystemExit(1) from exc

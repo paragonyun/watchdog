@@ -179,6 +179,122 @@ def test_sync_calendar_uploads_completed_calendar_json(monkeypatch, tmp_path) ->
     assert calls[0][1:] == ("https://example.com/api/upload", "token")
 
 
+def test_refresh_dashboard_runs_required_steps_and_available_codex_artifacts(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
+    codex_news = tmp_path / "codex_news_risk.json"
+    opinion = tmp_path / "codex_investment_opinion.json"
+    calendar = tmp_path / "economic_calendar.json"
+    report = tmp_path / "dashboard_report_v2_latest.json"
+    for path in (codex_news, opinion, calendar, report):
+        path.write_text("{}", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(
+        watchdog,
+        "sync_ledger",
+        lambda sync_dashboard=False: calls.append(("ledger", sync_dashboard)) or {"schema_version": "dashboard_payload_v2"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "collect_news_risks",
+        lambda output_path=None, sync_dashboard=False: calls.append(("news", sync_dashboard)) or {"schema_version": "news_risk_payload_v1"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "merge_news_risks",
+        lambda path, output_path=None, sync_dashboard=False: calls.append(("codex-news", path, sync_dashboard)) or {"schema_version": "news_risk_payload_v1"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "sync_opinions",
+        lambda path: calls.append(("opinion", path)) or {"schema_version": "dashboard_opinion_v1"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "sync_calendar",
+        lambda path: calls.append(("calendar", path)) or {"schema_version": "dashboard_calendar_v1"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "sync_report",
+        lambda path: calls.append(("report", path)) or {"schema_version": "dashboard_report_v2"},
+    )
+    monkeypatch.setattr(watchdog, "_codex_news_risk_path", lambda: codex_news)
+    monkeypatch.setattr(watchdog, "_codex_opinion_path", lambda: opinion)
+    monkeypatch.setattr(watchdog, "_codex_calendar_path", lambda: calendar)
+    monkeypatch.setattr(watchdog, "_latest_codex_report_path", lambda: report)
+    monkeypatch.setattr(watchdog, "_codex_report_path", lambda: report)
+
+    result = watchdog.refresh_dashboard()
+
+    assert result["schema_version"] == "dashboard_refresh_v1"
+    assert [step["name"] for step in result["steps"]] == [
+        "ledger",
+        "news_risks",
+        "codex_news_risks",
+        "opinion",
+        "calendar",
+        "research_report",
+    ]
+    assert calls == [
+        ("ledger", True),
+        ("news", True),
+        ("codex-news", codex_news, True),
+        ("opinion", opinion),
+        ("calendar", calendar),
+        ("report", report),
+    ]
+
+
+def test_refresh_dashboard_can_skip_codex_artifacts(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
+    calls = []
+    monkeypatch.setattr(
+        watchdog,
+        "sync_ledger",
+        lambda sync_dashboard=False: calls.append(("ledger", sync_dashboard)) or {"schema_version": "dashboard_payload_v2"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "collect_news_risks",
+        lambda output_path=None, sync_dashboard=False: calls.append(("news", sync_dashboard)) or {"schema_version": "news_risk_payload_v1"},
+    )
+
+    result = watchdog.refresh_dashboard(sync_codex=False)
+
+    assert [step["name"] for step in result["steps"]] == ["ledger", "news_risks"]
+    assert calls == [("ledger", True), ("news", True)]
+
+
+def test_prepare_codex_inputs_writes_manifest(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
+    manifest = tmp_path / "codex_dashboard_inputs_latest.json"
+    report_source = tmp_path / "portfolio_report_source.txt"
+    report_source.write_text("source", encoding="utf-8")
+    monkeypatch.setattr(
+        watchdog,
+        "sync_ledger",
+        lambda sync_dashboard=False: {"schema_version": "dashboard_payload_v2"},
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "collect_news_risks",
+        lambda output_path=None, sync_dashboard=False: {"schema_version": "news_risk_payload_v1"},
+    )
+    monkeypatch.setattr(watchdog, "create_portfolio_report_source", lambda: report_source)
+    monkeypatch.setattr(watchdog, "_codex_inputs_path", lambda: manifest)
+    monkeypatch.setattr(watchdog, "_codex_news_risk_path", lambda: tmp_path / "codex_news_risk.json")
+    monkeypatch.setattr(watchdog, "_codex_opinion_path", lambda: tmp_path / "codex_investment_opinion.json")
+    monkeypatch.setattr(watchdog, "_codex_calendar_path", lambda: tmp_path / "economic_calendar.json")
+    monkeypatch.setattr(watchdog, "_codex_report_path", lambda: tmp_path / "dashboard_report_v2_latest.json")
+
+    payload = watchdog.prepare_codex_inputs()
+
+    assert payload["schema_version"] == "codex_dashboard_inputs_v1"
+    assert payload["inputs"]["portfolio_report_source"] == str(report_source)
+    assert manifest.exists()
+
+
 def test_send_report_document_missing_file_error(tmp_path) -> None:
     watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
     missing = tmp_path / "missing.md"
