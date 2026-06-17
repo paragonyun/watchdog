@@ -8,23 +8,25 @@ import {
 import { requireSession } from "@/lib/auth";
 import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
 import { formatDashboardDate } from "@/lib/format-date";
-import { getLatestDashboardPayloads, getLatestNewsRiskPayload, getLatestOpinionPayload, getReportIndex } from "@/lib/storage";
+import { getLatestCalendarPayload, getLatestDashboardPayloads, getLatestNewsRiskPayload, getLatestOpinionPayload, getOpinionIndex, getReportIndex } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   await requireSession();
-  const [{ v1, v2 }, news, opinion, reports] = await Promise.all([
+  const [{ v1, v2 }, news, opinion, opinionIndex, calendar, reports] = await Promise.all([
     getLatestDashboardPayloads(),
     getLatestNewsRiskPayload(),
     getLatestOpinionPayload(),
+    getOpinionIndex(),
+    getLatestCalendarPayload(),
     getReportIndex(),
   ]);
   if (!v1 && !v2) return <EmptySettingsPage />;
-  return <SettingsScreen view={buildDashboardView(v1, v2)} newsAt={news?.generated_at ?? null} opinionAt={opinion?.generated_at ?? null} reportCount={reports.length} />;
+  return <SettingsScreen calendarAt={calendar?.generated_at ?? null} opinionCount={opinionIndex.length} view={buildDashboardView(v1, v2)} newsAt={news?.generated_at ?? null} opinionAt={opinion?.generated_at ?? null} reportCount={reports.length} />;
 }
 
-function SettingsScreen({ view, newsAt, opinionAt, reportCount }: { view: DashboardView; newsAt: string | null; opinionAt: string | null; reportCount: number }) {
+function SettingsScreen({ view, newsAt, opinionAt, opinionCount, calendarAt, reportCount }: { view: DashboardView; newsAt: string | null; opinionAt: string | null; opinionCount: number; calendarAt: string | null; reportCount: number }) {
   return (
     <div className="app-frame">
       <DesktopTopNavigation active="settings" />
@@ -45,6 +47,8 @@ function SettingsScreen({ view, newsAt, opinionAt, reportCount }: { view: Dashbo
               <SyncRow label="자산 스냅샷" value={formatDashboardDate(view.lastActualAt)} />
               <SyncRow label="뉴스 리스크" value={formatDashboardDate(newsAt)} />
               <SyncRow label="Codex 투자 의견" value={formatDashboardDate(opinionAt)} />
+              <SyncRow label="투자 의견 이력" value={`${opinionCount}건`} />
+              <SyncRow label="경제 일정" value={formatDashboardDate(calendarAt)} />
               <SyncRow label="보관 리포트" value={`${reportCount}건`} />
             </div>
           </article>

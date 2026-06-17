@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { NEWS_RISK_BLOB_KEY, OPINION_BLOB_KEY, REPORT_INDEX_BLOB_KEY, blobKeyForPayload, getLatestDashboardData, reportBlobKey, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
+import { CALENDAR_BLOB_KEY, NEWS_RISK_BLOB_KEY, OPINION_BLOB_KEY, OPINION_INDEX_BLOB_KEY, REPORT_INDEX_BLOB_KEY, blobKeyForPayload, getLatestDashboardData, opinionBlobKey, reportBlobKey, resolveDashboardPayload, resolveDashboardPayloads } from "../src/lib/storage";
 
 const validPayload = {
   schema_version: "dashboard_payload_v1",
@@ -53,6 +53,13 @@ test("news risk payload uses an independent private blob key", () => {
 
 test("Codex opinion payload uses an independent private blob key", () => {
   assert.equal(OPINION_BLOB_KEY, "dashboard/opinion-latest.json");
+  assert.equal(OPINION_INDEX_BLOB_KEY, "dashboard/opinions/index.json");
+  assert.equal(opinionBlobKey("opinion-20260615-1200"), "dashboard/opinions/opinion-20260615-1200.json");
+  assert.throws(() => opinionBlobKey("../private"), /invalid opinion id/);
+});
+
+test("economic calendar payload uses an independent private blob key", () => {
+  assert.equal(CALENDAR_BLOB_KEY, "dashboard/calendar-latest.json");
 });
 
 test("report payloads use a safe private archive path", () => {

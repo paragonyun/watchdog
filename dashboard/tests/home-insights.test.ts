@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildHomeInsights } from "../src/lib/home-insights";
+import type { CalendarPayload } from "../src/lib/calendar-payload";
 import type { NewsRiskItem, NewsRiskPayload } from "../src/lib/news-risk-payload";
 import type { OpinionPayload } from "../src/lib/opinion-payload";
 import type { ResearchReportPayload } from "../src/lib/report-payload";
@@ -148,8 +149,56 @@ const report: ResearchReportPayload = {
   },
 };
 
+const previousOpinion: OpinionPayload = {
+  ...opinion,
+  opinion_id: "opinion-20260608-0900",
+  generated_at: "2026-06-08T09:00:00+00:00",
+  items: opinion.items.map((item) => item.id === "arb" ? { ...item, action: "observe" } : item),
+};
+
+const previousReport: ResearchReportPayload = {
+  ...report,
+  report_id: "weekly-20260608-0900",
+  generated_at: "2026-06-08T09:00:00+00:00",
+  stance: "neutral",
+  asset_views: report.asset_views.map((item) => ({ ...item, action: "observe" })),
+};
+
+const calendar: CalendarPayload = {
+  schema_version: "dashboard_calendar_v1",
+  generated_at: "2026-06-18T08:00:00+09:00",
+  source: "codex",
+  timezone: "Asia/Seoul",
+  events: [
+    {
+      id: "past",
+      title: "지난 일정",
+      starts_at: "2026-06-17T09:00:00+09:00",
+      country: "미국",
+      category: "경기",
+      importance: "high",
+      asset_groups: ["isa"],
+      expected_impact: "이미 지난 일정입니다.",
+      watch_note: "표시하지 않습니다.",
+      source_url: null,
+    },
+    {
+      id: "cpi",
+      title: "미국 CPI",
+      starts_at: "2026-06-19T21:30:00+09:00",
+      country: "미국",
+      category: "물가",
+      importance: "high",
+      asset_groups: ["isa", "coin"],
+      expected_impact: "인플레이션 경로에 따라 주식과 코인의 할인율 부담이 달라질 수 있습니다.",
+      watch_note: "근원 CPI와 서비스 물가를 확인합니다.",
+      source_url: "https://example.com/cpi",
+    },
+  ],
+};
+
 test("home insights prioritize urgent risks and summarize Codex opinions", () => {
-  const result = buildHomeInsights(opinion, newsRisk, report);
+  const result = buildHomeInsights({ opinion, newsRisk, report });
 
   assert.equal(result.newsRisk?.totalCount, 3);
   assert.equal(result.newsRisk?.newCount, 1);
@@ -160,7 +209,7 @@ test("home insights prioritize urgent risks and summarize Codex opinions", () =>
 });
 
 test("home insights expose the latest completed report thesis", () => {
-  const result = buildHomeInsights(opinion, newsRisk, report);
+  const result = buildHomeInsights({ opinion, newsRisk, report });
 
   assert.equal(result.report?.kindLabel, "주간 리포트");
   assert.equal(result.report?.stanceLabel, "신중");
@@ -170,9 +219,29 @@ test("home insights expose the latest completed report thesis", () => {
 });
 
 test("home insights keep unavailable sources empty", () => {
-  const result = buildHomeInsights(null, null, null);
+  const result = buildHomeInsights({});
 
   assert.equal(result.opinion, null);
   assert.equal(result.newsRisk, null);
   assert.equal(result.report, null);
+  assert.equal(result.calendar, null);
+});
+
+test("home insights show upcoming calendar events and previous judgment changes", () => {
+  const result = buildHomeInsights({
+    opinion,
+    previousOpinion,
+    newsRisk,
+    report,
+    previousReport,
+    calendar,
+    now: new Date("2026-06-18T09:00:00+09:00"),
+  });
+
+  assert.equal(result.calendar?.totalCount, 1);
+  assert.equal(result.calendar?.highCount, 1);
+  assert.deepEqual(result.calendar?.items.map((item) => item.title), ["미국 CPI"]);
+  assert.equal(result.calendar?.items[0].importanceLabel, "높음");
+  assert.equal(result.opinion?.changeSummary, "아비트럼: 관찰 필요 → 매도");
+  assert.equal(result.report?.changeSummary, "전략 판단: 중립 → 신중");
 });

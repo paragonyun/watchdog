@@ -1,3 +1,4 @@
+import type { CalendarImportance, CalendarPayload } from "./calendar-payload";
 import type { NewsRiskPayload, NewsRiskPriority } from "./news-risk-payload";
 import { buildNewsRiskView } from "./news-risk-view";
 import type { OpinionAction, OpinionPayload } from "./opinion-payload";
@@ -17,11 +18,28 @@ export type HomeInsights = {
       impact: string;
     }>;
   } | null;
+  calendar: {
+    generatedAt: string;
+    totalCount: number;
+    highCount: number;
+    items: Array<{
+      id: string;
+      title: string;
+      startsAt: string;
+      country: string;
+      category: string;
+      importance: CalendarImportance;
+      importanceLabel: string;
+      expectedImpact: string;
+      watchNote: string;
+    }>;
+  } | null;
   opinion: {
     generatedAt: string;
     posture: OpinionAction;
     postureLabel: string;
     summary: string;
+    changeSummary: string | null;
     counts: Record<OpinionAction, number>;
     items: Array<{
       id: string;
@@ -41,22 +59,31 @@ export type HomeInsights = {
     stanceLabel: string;
     headline: string;
     summaryPoints: string[];
+    changeSummary: string | null;
     validationValid: boolean;
   } | null;
 };
 
+export type BuildHomeInsightsInput = {
+  opinion?: OpinionPayload | null;
+  previousOpinion?: OpinionPayload | null;
+  newsRisk?: NewsRiskPayload | null;
+  report?: ReportPayload | null;
+  previousReport?: ReportPayload | null;
+  calendar?: CalendarPayload | null;
+  now?: Date;
+};
+
 const opinionRank: Record<OpinionAction, number> = { sell: 3, buy: 2, observe: 1 };
 const newsRiskRank: Record<NewsRiskPriority, number> = { urgent: 3, caution: 2, watch: 1 };
+const importanceLabels: Record<CalendarImportance, string> = { high: "높음", medium: "중간", low: "낮음" };
 
-export function buildHomeInsights(
-  opinion: OpinionPayload | null,
-  newsRisk: NewsRiskPayload | null,
-  report: ReportPayload | null,
-): HomeInsights {
+export function buildHomeInsights(input: BuildHomeInsightsInput = {}): HomeInsights {
   return {
-    newsRisk: newsRisk ? newsRiskSummary(newsRisk) : null,
-    opinion: opinion ? opinionSummary(opinion) : null,
-    report: report ? reportSummary(report) : null,
+    newsRisk: input.newsRisk ? newsRiskSummary(input.newsRisk) : null,
+    calendar: input.calendar ? calendarSummary(input.calendar, input.now ?? new Date()) : null,
+    opinion: input.opinion ? opinionSummary(input.opinion, input.previousOpinion ?? null) : null,
+    report: input.report ? reportSummary(input.report, input.previousReport ?? null) : null,
   };
 }
 
@@ -80,7 +107,29 @@ function newsRiskSummary(payload: NewsRiskPayload): NonNullable<HomeInsights["ne
   };
 }
 
-function opinionSummary(payload: OpinionPayload): NonNullable<HomeInsights["opinion"]> {
+function calendarSummary(payload: CalendarPayload, now: Date): NonNullable<HomeInsights["calendar"]> {
+  const upcoming = payload.events
+    .filter((event) => Date.parse(event.starts_at) >= now.getTime())
+    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+  return {
+    generatedAt: payload.generated_at,
+    totalCount: upcoming.length,
+    highCount: upcoming.filter((event) => event.importance === "high").length,
+    items: upcoming.slice(0, 3).map((event) => ({
+      id: event.id,
+      title: event.title,
+      startsAt: event.starts_at,
+      country: event.country,
+      category: event.category,
+      importance: event.importance,
+      importanceLabel: importanceLabels[event.importance],
+      expectedImpact: event.expected_impact,
+      watchNote: event.watch_note,
+    })),
+  };
+}
+
+function opinionSummary(payload: OpinionPayload, previous: OpinionPayload | null): NonNullable<HomeInsights["opinion"]> {
   const counts = { buy: 0, sell: 0, observe: 0 };
   payload.items.forEach((item) => counts[item.action] += 1);
   return {
@@ -88,6 +137,7 @@ function opinionSummary(payload: OpinionPayload): NonNullable<HomeInsights["opin
     posture: payload.portfolio_posture,
     postureLabel: actionLabel(payload.portfolio_posture),
     summary: payload.summary,
+    changeSummary: opinionChangeSummary(payload, previous),
     counts,
     items: [...payload.items]
       .sort((left, right) => opinionRank[right.action] - opinionRank[left.action])
@@ -103,7 +153,7 @@ function opinionSummary(payload: OpinionPayload): NonNullable<HomeInsights["opin
   };
 }
 
-function reportSummary(payload: ReportPayload): NonNullable<HomeInsights["report"]> {
+function reportSummary(payload: ReportPayload, previous: ReportPayload | null): NonNullable<HomeInsights["report"]> {
   if (isResearchReport(payload)) {
     return {
       id: payload.report_id,
@@ -114,6 +164,7 @@ function reportSummary(payload: ReportPayload): NonNullable<HomeInsights["report
       stanceLabel: stanceLabel(payload.stance),
       headline: payload.investment_thesis.headline,
       summaryPoints: payload.executive_summary.slice(0, 3),
+      changeSummary: reportChangeSummary(payload, previous),
       validationValid: payload.summary.validation_valid,
     };
   }
@@ -126,8 +177,39 @@ function reportSummary(payload: ReportPayload): NonNullable<HomeInsights["report
     stanceLabel: "작성 원본",
     headline: payload.sections[0]?.title ?? payload.title,
     summaryPoints: payload.sections[0]?.lines.slice(0, 3) ?? [],
+    changeSummary: null,
     validationValid: payload.summary.validation_valid,
   };
+}
+
+function opinionChangeSummary(payload: OpinionPayload, previous: OpinionPayload | null): string | null {
+  if (!previous) return null;
+  const previousById = new Map(previous.items.map((item) => [item.id, item]));
+  for (const item of payload.items) {
+    const before = previousById.get(item.id);
+    if (before && before.action !== item.action) {
+      return `${item.name}: ${actionLabel(before.action)} → ${actionLabel(item.action)}`;
+    }
+  }
+  if (previous.portfolio_posture !== payload.portfolio_posture) {
+    return `포트폴리오 판단: ${actionLabel(previous.portfolio_posture)} → ${actionLabel(payload.portfolio_posture)}`;
+  }
+  return null;
+}
+
+function reportChangeSummary(payload: ResearchReportPayload, previous: ReportPayload | null): string | null {
+  if (!previous || !isResearchReport(previous)) return null;
+  if (previous.stance !== payload.stance) {
+    return `전략 판단: ${stanceLabel(previous.stance)} → ${stanceLabel(payload.stance)}`;
+  }
+  const previousBySymbol = new Map(previous.asset_views.map((item) => [item.symbol, item]));
+  for (const item of payload.asset_views) {
+    const before = previousBySymbol.get(item.symbol);
+    if (before && before.action !== item.action) {
+      return `${item.name}: ${actionLabel(before.action)} → ${actionLabel(item.action)}`;
+    }
+  }
+  return null;
 }
 
 function actionLabel(action: OpinionAction): string {

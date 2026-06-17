@@ -117,6 +117,16 @@ python -m portfolio_watchdog install-schedule
 
 상세 운영·복구 절차는 [뉴스 리스크 운영 Runbook](docs/operations/news-risk-runbook.md)을 참고합니다. 뉴스 리스크는 확인 우선순위를 설명하는 관찰 항목이며 매수·매도 추천이 아닙니다.
 
+## 경제 일정 및 판단 변화
+
+경제 일정은 외부 API를 대시보드에서 직접 호출하지 않고, Codex 또는 사용자가 작성한 `codex_economic_calendar_v1` JSON을 Watchdog이 검증해 `dashboard_calendar_v1`로 축소한 뒤 업로드합니다.
+
+```powershell
+python -m portfolio_watchdog sync-calendar --path snapshots/economic_calendar.json
+```
+
+대시보드는 Private Blob `dashboard/calendar-latest.json`에서 다가오는 일정만 읽습니다. 투자 의견은 최신본뿐 아니라 `dashboard/opinions/index.json`과 개별 의견 파일도 보관해, 직전 의견 대비 `매수/매도/관찰 필요` 변화가 홈 화면에 표시됩니다.
+
 ## 리포트 정확성 원칙
 
 - 현재 자산 현황은 실행 시점 Upbit/KIS/가격 API 평가값을 기준으로 합니다.

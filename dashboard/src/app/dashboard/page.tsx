@@ -12,9 +12,12 @@ import { buildDashboardView, type DashboardView } from "@/lib/dashboard-view";
 import { formatDashboardDate } from "@/lib/format-date";
 import { buildHomeInsights, type HomeInsights } from "@/lib/home-insights";
 import {
+  getLatestCalendarPayload,
   getLatestDashboardPayloads,
   getLatestNewsRiskPayload,
   getLatestOpinionPayload,
+  getOpinionIndex,
+  getOpinionPayload,
   getReportIndex,
   getReportPayload,
 } from "@/lib/storage";
@@ -25,11 +28,13 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   await requireSession();
-  const [{ v1, v2 }, newsRisk, opinion, reportIndex] = await Promise.all([
+  const [{ v1, v2 }, newsRisk, opinion, opinionIndex, reportIndex, calendar] = await Promise.all([
     getLatestDashboardPayloads(),
     getLatestNewsRiskPayload(),
     getLatestOpinionPayload(),
+    getOpinionIndex(),
     getReportIndex(),
+    getLatestCalendarPayload(),
   ]);
 
   if (!v1 && !v2) {
@@ -37,9 +42,20 @@ export default async function DashboardPage() {
   }
 
   const reportId = reportIndex.find((item) => item.schema_version === "dashboard_report_v2")?.report_id ?? reportIndex[0]?.report_id;
-  const report = reportId ? await getReportPayload(reportId) : null;
+  const previousReportId = reportIndex.find((item) => item.report_id !== reportId && item.schema_version === "dashboard_report_v2")?.report_id;
+  const previousOpinionId = opinionIndex.find((item) => item.opinion_id !== opinion?.opinion_id)?.opinion_id;
+  const [report, previousReport, previousOpinion] = await Promise.all([
+    reportId ? getReportPayload(reportId) : null,
+    previousReportId ? getReportPayload(previousReportId) : null,
+    previousOpinionId ? getOpinionPayload(previousOpinionId) : null,
+  ]);
 
-  return <DashboardHome insights={buildHomeInsights(opinion, newsRisk, report)} view={buildDashboardView(v1, v2)} />;
+  return (
+    <DashboardHome
+      insights={buildHomeInsights({ calendar, newsRisk, opinion, previousOpinion, report, previousReport })}
+      view={buildDashboardView(v1, v2)}
+    />
+  );
 }
 
 function DashboardHome({ view, insights }: { view: DashboardView; insights: HomeInsights }) {
@@ -103,6 +119,7 @@ function DashboardHome({ view, insights }: { view: DashboardView; insights: Home
 
         <section className="insight-grid">
           <AssetPanel view={view} />
+          <CalendarPanel insight={insights.calendar} />
           <NewsRiskPanel insight={insights.newsRisk} />
           <NewsPanel view={view} />
           <OpinionPanel insight={insights.opinion} />
@@ -290,6 +307,29 @@ function NewsPanel({ view }: { view: DashboardView }) {
   );
 }
 
+function CalendarPanel({ insight }: { insight: HomeInsights["calendar"] }) {
+  return (
+    <section className="surface home-calendar-panel">
+      <PanelHeading title="주요 경제 일정" meta={insight ? `${insight.totalCount}건 · 높음 ${insight.highCount}건` : "일정 대기"} />
+      {insight && insight.items.length ? (
+        <div className="home-calendar-list">
+          {insight.items.map((item) => (
+            <article key={item.id}>
+              <time dateTime={item.startsAt}>{formatDate(item.startsAt)}</time>
+              <div>
+                <span className={item.importance}>{item.importanceLabel}</span>
+                <strong>{item.title}</strong>
+                <p>{item.expectedImpact}</p>
+                <small>{item.country} · {item.category} · {item.watchNote}</small>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : <EmptyState text="아직 업로드된 경제 일정이 없습니다." />}
+    </section>
+  );
+}
+
 function NewsRiskPanel({ insight }: { insight: HomeInsights["newsRisk"] }) {
   return (
     <section className="surface home-risk-panel">
@@ -318,6 +358,7 @@ function OpinionPanel({ insight }: { insight: HomeInsights["opinion"] }) {
             <span>포트폴리오 판단</span>
             <strong>{insight.postureLabel}</strong>
             <p>{insight.summary}</p>
+            {insight.changeSummary ? <small>변화: {insight.changeSummary}</small> : null}
           </div>
           <div className="home-opinion-counts">
             <span><b className="buy">{insight.counts.buy}</b>매수</span>
@@ -350,6 +391,7 @@ function ReportPanel({ insight }: { insight: HomeInsights["report"] }) {
           </div>
           <h3>{insight.title}</h3>
           <strong>{insight.headline}</strong>
+          {insight.changeSummary ? <p className="home-change-note">변화: {insight.changeSummary}</p> : null}
           <ul>{insight.summaryPoints.map((item) => <li key={item}>{item}</li>)}</ul>
           <small>{formatDate(insight.generatedAt)} 생성</small>
         </>

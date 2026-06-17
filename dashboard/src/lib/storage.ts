@@ -7,6 +7,7 @@ import {
   type DashboardPayload,
   type DashboardPayloadV2,
 } from "./dashboard-payload";
+import { validateCalendarPayload, type CalendarPayload } from "./calendar-payload";
 import { validateNewsRiskPayload, type NewsRiskPayload } from "./news-risk-payload";
 import { validateOpinionPayload, type OpinionPayload } from "./opinion-payload";
 import {
@@ -21,7 +22,9 @@ import {
 const BLOB_KEY = "dashboard/latest.json";
 const V2_BLOB_KEY = "dashboard/v2-latest.json";
 export const NEWS_RISK_BLOB_KEY = "dashboard/news-risk-latest.json";
+export const CALENDAR_BLOB_KEY = "dashboard/calendar-latest.json";
 export const OPINION_BLOB_KEY = "dashboard/opinion-latest.json";
+export const OPINION_INDEX_BLOB_KEY = "dashboard/opinions/index.json";
 export const REPORT_INDEX_BLOB_KEY = "dashboard/reports/index.json";
 
 export type DashboardDataSource = "blob" | "sample" | "empty";
@@ -34,6 +37,10 @@ export type DashboardDataResult = {
 export type DashboardPayloads = {
   v1: DashboardPayload | null;
   v2: DashboardPayloadV2 | null;
+};
+
+export type OpinionIndexItem = Pick<OpinionPayload, "opinion_id" | "generated_at" | "portfolio_posture" | "summary"> & {
+  counts: Record<"buy" | "sell" | "observe", number>;
 };
 
 export function resolveDashboardPayload(value: unknown, options: { allowSample: boolean }): DashboardDataResult {
@@ -107,6 +114,21 @@ export async function saveLatestNewsRiskPayload(payload: NewsRiskPayload): Promi
   });
 }
 
+export async function getLatestCalendarPayload(): Promise<CalendarPayload | null> {
+  const value = await readBlobPayload(CALENDAR_BLOB_KEY);
+  return validateCalendarPayload(value) ? value : null;
+}
+
+export async function saveLatestCalendarPayload(payload: CalendarPayload): Promise<void> {
+  const { put } = await import("@vercel/blob");
+  await put(CALENDAR_BLOB_KEY, JSON.stringify(payload), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
 export async function getLatestOpinionPayload(): Promise<OpinionPayload | null> {
   const value = await readBlobPayload(OPINION_BLOB_KEY);
   return validateOpinionPayload(value) ? value : null;
@@ -120,6 +142,40 @@ export async function saveLatestOpinionPayload(payload: OpinionPayload): Promise
     allowOverwrite: true,
     contentType: "application/json",
   });
+  await put(opinionBlobKey(payload.opinion_id), JSON.stringify(payload), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+  const existing = await getOpinionIndex();
+  const index = [
+    toOpinionIndexItem(payload),
+    ...existing.filter((item) => item.opinion_id !== payload.opinion_id),
+  ]
+    .sort((left, right) => Date.parse(right.generated_at) - Date.parse(left.generated_at))
+    .slice(0, 50);
+  await put(OPINION_INDEX_BLOB_KEY, JSON.stringify(index), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
+export function opinionBlobKey(opinionId: string): string {
+  if (!validOpinionId(opinionId)) throw new Error("invalid opinion id");
+  return `dashboard/opinions/${opinionId}.json`;
+}
+
+export async function getOpinionIndex(): Promise<OpinionIndexItem[]> {
+  const value = await readBlobPayload(OPINION_INDEX_BLOB_KEY);
+  return Array.isArray(value) ? value.filter(validateOpinionIndexItem) : [];
+}
+
+export async function getOpinionPayload(opinionId: string): Promise<OpinionPayload | null> {
+  const value = await readBlobPayload(opinionBlobKey(opinionId));
+  return validateOpinionPayload(value) ? value : null;
 }
 
 export function reportBlobKey(reportId: string): string {
@@ -172,4 +228,52 @@ async function readBlobPayload(key: string): Promise<unknown> {
     console.error(`Failed to load dashboard blob ${key}:`, error instanceof Error ? error.message : "unknown error");
     return null;
   }
+}
+
+function validOpinionId(value: unknown): value is string {
+  return typeof value === "string" && /^opinion-\d{8}-\d{4}$/.test(value);
+}
+
+function toOpinionIndexItem(payload: OpinionPayload): OpinionIndexItem {
+  return {
+    opinion_id: payload.opinion_id,
+    generated_at: payload.generated_at,
+    portfolio_posture: payload.portfolio_posture,
+    summary: payload.summary,
+    counts: {
+      buy: payload.items.filter((item) => item.action === "buy").length,
+      sell: payload.items.filter((item) => item.action === "sell").length,
+      observe: payload.items.filter((item) => item.action === "observe").length,
+    },
+  };
+}
+
+function validateOpinionIndexItem(value: unknown): value is OpinionIndexItem {
+  return (
+    isRecord(value) &&
+    validOpinionId(value.opinion_id) &&
+    isIsoDatetime(value.generated_at) &&
+    (value.portfolio_posture === "buy" || value.portfolio_posture === "sell" || value.portfolio_posture === "observe") &&
+    nonEmptyString(value.summary) &&
+    isRecord(value.counts) &&
+    finiteNumber(value.counts.buy) &&
+    finiteNumber(value.counts.sell) &&
+    finiteNumber(value.counts.observe)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isIsoDatetime(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portfolio Watchdog")
-    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "collect-news-risks", "merge-news-risks", "sync-news-risks", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
+    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "sync-calendar", "collect-news-risks", "merge-news-risks", "sync-news-risks", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
     parser.add_argument("--config", default=None, help="설정 파일 경로")
     parser.add_argument("--env", default=None, help="환경 변수 파일 경로")
     parser.add_argument("--path", default=None, help="리포트/메시지/대시보드 원본 파일 경로")
@@ -39,7 +39,7 @@ def main() -> None:
         install_windows_schedule()
         logger.info("Windows 작업 스케줄러 등록을 완료했습니다.")
         return
-    if args.command in {"render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "merge-news-risks", "sync-news-risks"} and not args.path:
+    if args.command in {"render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "sync-calendar", "merge-news-risks", "sync-news-risks"} and not args.path:
         parser.error(f"{args.command}에는 --path가 필요합니다.")
 
     runtime_paths = resolve_runtime_paths(args.config, args.env)
@@ -100,6 +100,12 @@ def main() -> None:
     elif args.command == "sync-opinions":
         try:
             app.sync_opinions(Path(args.path))
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+    elif args.command == "sync-calendar":
+        try:
+            app.sync_calendar(Path(args.path))
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error("%s", exc)
             raise SystemExit(1) from exc

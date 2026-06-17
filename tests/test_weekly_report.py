@@ -162,6 +162,23 @@ def test_sync_report_uploads_completed_research_json(monkeypatch, tmp_path) -> N
     assert calls[0][1:] == ("https://example.com/api/upload", "token")
 
 
+def test_sync_calendar_uploads_completed_calendar_json(monkeypatch, tmp_path) -> None:
+    watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={"WATCHDOG_DASHBOARD_UPLOAD_URL": "https://example.com/api/upload", "WATCHDOG_UPLOAD_TOKEN": "token"})
+    path = tmp_path / "calendar.json"
+    path.write_text(
+        '{"schema_version":"codex_economic_calendar_v1","generated_at":"2026-06-18T08:00:00+09:00","source":"codex","timezone":"Asia/Seoul","events":[{"id":"us-cpi-20260619","title":"미국 CPI","starts_at":"2026-06-19T21:30:00+09:00","country":"미국","category":"물가","importance":"high","asset_groups":["isa","coin"],"expected_impact":"인플레이션 경로에 따라 주식과 코인의 할인율 부담이 달라질 수 있습니다.","watch_note":"근원 CPI와 서비스 물가를 확인합니다.","source_url":"https://example.com/cpi"}]}',
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(app_module, "upload_dashboard_payload", lambda payload, endpoint, token: calls.append((payload, endpoint, token)) or {"ok": True})
+
+    payload = watchdog.sync_calendar(path)
+
+    assert payload["schema_version"] == "dashboard_calendar_v1"
+    assert payload["events"][0]["title"] == "미국 CPI"
+    assert calls[0][1:] == ("https://example.com/api/upload", "token")
+
+
 def test_send_report_document_missing_file_error(tmp_path) -> None:
     watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
     missing = tmp_path / "missing.md"

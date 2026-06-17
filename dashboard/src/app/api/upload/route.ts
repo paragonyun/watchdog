@@ -1,9 +1,10 @@
 import { verifyBearerToken } from "@/lib/auth-core";
+import { validateCalendarPayload } from "@/lib/calendar-payload";
 import { validateDashboardPayload } from "@/lib/dashboard-payload";
 import { validateNewsRiskPayload } from "@/lib/news-risk-payload";
 import { validateOpinionPayload } from "@/lib/opinion-payload";
 import { validateReportPayload } from "@/lib/report-payload";
-import { saveLatestDashboardPayload, saveLatestNewsRiskPayload, saveLatestOpinionPayload, saveReportPayload } from "@/lib/storage";
+import { saveLatestCalendarPayload, saveLatestDashboardPayload, saveLatestNewsRiskPayload, saveLatestOpinionPayload, saveReportPayload } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,11 @@ export async function POST(request: Request) {
   if (validateNewsRiskPayload(body)) {
     await saveLatestNewsRiskPayload(body);
     return Response.json({ ok: true, generated_at: body.generated_at });
+  }
+
+  if (validateCalendarPayload(body)) {
+    await saveLatestCalendarPayload(body);
+    return Response.json({ ok: true, generated_at: body.generated_at, event_count: body.events.length });
   }
 
   if (validateOpinionPayload(body)) {

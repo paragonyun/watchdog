@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 from .config import AppConfig, AssetConfig
 from .dashboard_data import build_dashboard_payload, build_dashboard_payload_v2, load_dashboard_source_payload, upload_dashboard_payload
+from .economic_calendar import build_economic_calendar_payload
 from .history import HistoryRepository
 from .investment_opinion import build_investment_opinion_payload
 from .ledger.import_history import import_history_json
@@ -867,6 +868,24 @@ class PortfolioWatchdogApp:
             self.env.get("WATCHDOG_UPLOAD_TOKEN"),
         )
         logger.info("Codex opinions synced: %s", result)
+        return payload
+
+    def sync_calendar(self, path: Path) -> Dict[str, object]:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        calendar_path = Path(path)
+        if not calendar_path.exists():
+            raise FileNotFoundError(f"Economic calendar JSON not found: {calendar_path}")
+        if not calendar_path.is_file():
+            raise ValueError(f"Economic calendar path is not a file: {calendar_path}")
+        payload = build_economic_calendar_payload(
+            json.loads(calendar_path.read_text(encoding="utf-8"))
+        )
+        result = upload_dashboard_payload(
+            payload,
+            self.env.get("WATCHDOG_DASHBOARD_UPLOAD_URL"),
+            self.env.get("WATCHDOG_UPLOAD_TOKEN"),
+        )
+        logger.info("Economic calendar synced: %s", result)
         return payload
 
     def collect_news_risks(self, output_path: Path | None = None, sync_dashboard: bool = False) -> Dict[str, object]:
