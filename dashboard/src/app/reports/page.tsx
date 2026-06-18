@@ -10,9 +10,11 @@ import {
 import { requireSession } from "@/lib/auth";
 import { formatDashboardDate } from "@/lib/format-date";
 import {
+  buildReportQualityView,
   isResearchReport,
   type ReportIndexItem,
   type ReportPayload,
+  type ReportQualityView,
   type ResearchReportPayload,
 } from "@/lib/report-payload";
 import { getReportIndex, getReportPayload } from "@/lib/storage";
@@ -34,6 +36,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
 
 function ReportsScreen({ index, report }: { index: ReportIndexItem[]; report: ReportPayload }) {
   const completedCount = index.filter((item) => item.schema_version === "dashboard_report_v2").length;
+  const quality = buildReportQualityView(report);
   return (
     <div className="app-frame">
       <DesktopTopNavigation active="reports" />
@@ -56,13 +59,16 @@ function ReportsScreen({ index, report }: { index: ReportIndexItem[]; report: Re
         <section className="reports-summary">
           <ReportSummary label="보관 문서" value={`${index.length}건`} detail="최근 50건 유지" tone="archive" />
           <ReportSummary label="완성 리포트" value={`${completedCount}건`} detail="Codex 최종 분석" tone="final" />
-          <ReportSummary label="QC 상태" value={report.summary.validation_valid ? "통과" : "확인 필요"} detail="숫자 및 데이터 검증" tone="valid" />
+          <ReportSummary label="QC 상태" value={quality.status === "pass" ? "통과" : "보강 필요"} detail="본문, 근거, 부록 검증" tone="valid" />
           <ReportSummary label="현재 문서" value={kindLabel(report.report_kind)} detail={statusLabel(report)} tone="current" />
         </section>
 
         <section className="reports-layout">
           <ReportIndex index={index} selected={report.report_id} />
-          {isResearchReport(report) ? <ResearchDocument report={report} /> : <LegacyDocument report={report} />}
+          <div className="reports-document-stack">
+            {isResearchReport(report) ? <ResearchDocument report={report} /> : <LegacyDocument report={report} />}
+            <ReportQualityPanel quality={quality} />
+          </div>
         </section>
 
         <footer className="reports-footnote">
@@ -205,6 +211,30 @@ function ReportAppendix({ report }: { report: ReportPayload }) {
         <section className="report-qc-grid"><div><h3>제공자 상태</h3>{report.appendix.provider_status.map((provider) => <p key={provider.provider}><span className={provider.used_fallback ? "review" : "valid"} />{provider.provider} · {provider.used_fallback ? "대체값 사용" : "정상"}</p>)}</div><div><h3>검증 결과</h3>{report.appendix.validation_issues.length ? report.appendix.validation_issues.map((issue) => <p key={issue}>{issue}</p>) : <p>숫자·비중·변화율 기본 검증 통과</p>}</div></section>
       </div>
     </details>
+  );
+}
+
+function ReportQualityPanel({ quality }: { quality: ReportQualityView }) {
+  return (
+    <section className={`surface report-quality-panel ${quality.status}`}>
+      <header>
+        <div>
+          <span>REPORT QC</span>
+          <h2>리포트 품질 점검</h2>
+        </div>
+        <strong>{quality.status === "pass" ? "통과" : "보강 필요"}</strong>
+      </header>
+      <p>{quality.summary}</p>
+      <div className="report-quality-grid">
+        {quality.checks.map((check) => (
+          <article className={check.status} key={check.id}>
+            <span>{check.status === "pass" ? "PASS" : "REVIEW"}</span>
+            <h3>{check.label}</h3>
+            <p>{check.detail}</p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 

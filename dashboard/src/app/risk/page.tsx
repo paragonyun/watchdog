@@ -204,6 +204,17 @@ function NewsRiskSection({ newsRisk }: { newsRisk: NewsRiskView | null }) {
             />
           </div>
 
+          <section className={`surface news-risk-narrative ${newsRisk.narrative.tone}`}>
+            <div>
+              <span>오늘의 리스크 해석</span>
+              <h3>{newsRisk.narrative.headline}</h3>
+              <p>{newsRisk.narrative.summary}</p>
+            </div>
+            <ul>
+              {newsRisk.narrative.nextActions.map((action) => <li key={action}>{action}</li>)}
+            </ul>
+          </section>
+
           <div className="news-risk-columns">
             <NewsRiskGroup
               description="보유 종목과 뉴스가 직접 연결된 위험"

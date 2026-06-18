@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateReportPayload } from "../src/lib/report-payload";
+import { buildReportQualityView, validateReportPayload } from "../src/lib/report-payload";
 
 const report = {
   schema_version: "dashboard_report_v1",
@@ -85,4 +85,39 @@ test("accepts completed analyst-style v2 reports and rejects source documents", 
 
   assert.equal(validateReportPayload(v2), true);
   assert.equal(validateReportPayload({ ...v2, document_status: "source" }), false);
+});
+
+test("builds report quality checks beyond JSON validity", () => {
+  const v2 = {
+    ...report,
+    schema_version: "dashboard_report_v2",
+    subtitle: "변동성 관리가 필요한 구간",
+    stance: "cautious",
+    executive_summary: ["요약입니다."],
+    key_metrics: [{ label: "총자산", value: "1,000원", context: "검증용", tone: "neutral" }],
+    investment_thesis: {
+      headline: "핵심 논리",
+      body: "본문입니다.",
+      facts: ["사실"],
+      interpretations: ["해석"],
+      estimates: ["추정"],
+    },
+    asset_views: [{
+      symbol: "BTC",
+      name: "비트코인",
+      action: "observe",
+      thesis: "관찰 필요",
+      catalysts: ["촉매"],
+      risks: ["위험"],
+    }],
+    scenarios: [{ name: "기준", probability: "중간", trigger: "금리 안정", impact: "회복", response: "유지" }],
+    risk_watchlist: ["변동성"],
+    conclusion: "결론입니다.",
+  };
+
+  const quality = buildReportQualityView(v2);
+
+  assert.equal(quality.status, "review");
+  assert.equal(quality.checks.find((check) => check.id === "evidence")?.status, "pass");
+  assert.equal(quality.checks.find((check) => check.id === "scenarios")?.status, "review");
 });

@@ -56,6 +56,21 @@ export type ReportIndexItem = Pick<
   "report_id" | "generated_at" | "report_kind" | "title" | "document_status" | "summary"
 > & { schema_version?: ReportPayload["schema_version"] };
 
+export type ReportQualityStatus = "pass" | "review";
+
+export type ReportQualityCheck = {
+  id: "document" | "evidence" | "asset_views" | "scenarios" | "appendix" | "providers";
+  label: string;
+  status: ReportQualityStatus;
+  detail: string;
+};
+
+export type ReportQualityView = {
+  status: ReportQualityStatus;
+  summary: string;
+  checks: ReportQualityCheck[];
+};
+
 const reportIdPattern = /^(portfolio|weekly)-\d{8}-\d{4}$/;
 
 export function validateReportPayload(value: unknown): value is ReportPayload {
@@ -104,6 +119,85 @@ export function toReportIndexItem(payload: ReportPayload): ReportIndexItem {
     document_status: payload.document_status,
     summary: payload.summary,
   };
+}
+
+export function buildReportQualityView(payload: ReportPayload): ReportQualityView {
+  const providerFallbacks = payload.appendix.provider_status.filter((provider) => provider.used_fallback);
+  const checks: ReportQualityCheck[] = [
+    qualityCheck(
+      "document",
+      "문서 형태",
+      isResearchReport(payload),
+      isResearchReport(payload)
+        ? "완성 리서치 리포트 형식입니다."
+        : "작성 원본입니다. Codex 최종 리포트 동기화가 필요합니다.",
+    ),
+    qualityCheck(
+      "appendix",
+      "숫자 검증",
+      payload.summary.validation_valid && payload.appendix.validation_issues.length === 0,
+      payload.appendix.validation_issues.length
+        ? payload.appendix.validation_issues.join(" / ")
+        : "총액, 비중, 변동률 기본 검증을 통과했습니다.",
+    ),
+    qualityCheck(
+      "providers",
+      "데이터 출처",
+      providerFallbacks.length === 0,
+      providerFallbacks.length
+        ? `${providerFallbacks.map((provider) => provider.provider).join(", ")} fallback 사용`
+        : "주요 데이터 출처가 live 상태입니다.",
+    ),
+  ];
+
+  if (isResearchReport(payload)) {
+    checks.splice(
+      1,
+      0,
+      qualityCheck(
+        "evidence",
+        "사실/해석/추정",
+        payload.investment_thesis.facts.length > 0 &&
+          payload.investment_thesis.interpretations.length > 0 &&
+          payload.investment_thesis.estimates.length > 0,
+        "투자 논리의 근거 레이어를 분리해 표시합니다.",
+      ),
+      qualityCheck(
+        "asset_views",
+        "자산별 판단",
+        payload.asset_views.length > 0 &&
+          payload.asset_views.every((view) => view.catalysts.length > 0 && view.risks.length > 0),
+        "각 자산에 매수, 매도, 관찰 판단과 촉매/위험을 포함합니다.",
+      ),
+      qualityCheck(
+        "scenarios",
+        "시나리오",
+        payload.scenarios.length >= 3,
+        payload.scenarios.length >= 3
+          ? "상승, 기준, 하락 시나리오를 모두 포함합니다."
+          : "상승, 기준, 하락 시나리오 3개 이상으로 보강하는 편이 좋습니다.",
+      ),
+    );
+  }
+
+  const status = checks.every((check) => check.status === "pass") ? "pass" : "review";
+  return {
+    status,
+    summary:
+      status === "pass"
+        ? "리포트 본문, 근거, 시나리오, 부록 QC를 통과했습니다."
+        : "일부 리포트 품질 항목은 보강하거나 재검토하는 편이 좋습니다.",
+    checks,
+  };
+}
+
+function qualityCheck(
+  id: ReportQualityCheck["id"],
+  label: string,
+  passed: boolean,
+  detail: string,
+): ReportQualityCheck {
+  return { id, label, status: passed ? "pass" : "review", detail };
 }
 
 function validSummary(value: unknown): value is ReportPayload["summary"] {

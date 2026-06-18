@@ -341,6 +341,16 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
 .news-risk-summary-item.refresh::before { background: var(--muted); }
 .news-risk-summary-item span, .news-risk-summary-item small { color: var(--muted); display: block; font-size: 9px; }
 .news-risk-summary-item strong { display: block; font-size: 18px; margin: 9px 0 6px; }
+.news-risk-narrative { align-items: start; border-left: 4px solid var(--blue); display: grid; gap: 18px; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); margin-bottom: 14px; padding: 18px; }
+.news-risk-narrative.urgent { border-left-color: var(--red); }
+.news-risk-narrative.caution { border-left-color: var(--orange); }
+.news-risk-narrative.watch { border-left-color: var(--blue); }
+.news-risk-narrative span { color: var(--blue); display: block; font-size: 10px; font-weight: 800; margin-bottom: 7px; }
+.news-risk-narrative.urgent span { color: var(--red); }
+.news-risk-narrative.caution span { color: var(--orange); }
+.news-risk-narrative h3 { font-size: 17px; margin: 0 0 8px; }
+.news-risk-narrative p { color: var(--muted); font-size: 11px; line-height: 1.55; margin: 0; }
+.news-risk-narrative ul { border-left: 1px solid var(--line); color: var(--ink); display: grid; font-size: 10px; gap: 7px; line-height: 1.45; margin: 0; padding: 0 0 0 18px; }
 .news-risk-columns { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .news-risk-group { padding: 0; overflow: hidden; }
 .news-risk-group > header { align-items: start; background: var(--surface-soft); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 16px 18px; }
@@ -473,6 +483,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
 .reports-summary-item span, .reports-summary-item small { color: var(--muted); display: block; font-size: 10px; }
 .reports-summary-item strong { display: block; font-size: 21px; margin: 10px 0 7px; }
 .reports-layout { display: grid; gap: 14px; grid-template-columns: minmax(250px, .55fr) minmax(0, 1.75fr); margin: 0 auto; max-width: 1520px; }
+.reports-document-stack { display: grid; gap: 14px; min-width: 0; }
 .reports-index { overflow: hidden; padding: 0; }
 .reports-index > header { align-items: center; background: var(--surface-soft); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 16px; }
 .reports-index > header h2 { font-size: 14px; margin: 0; }
@@ -495,6 +506,21 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
 .report-document-header > div:last-child { text-align: right; }
 .report-document-header > div:last-child strong { display: block; font-size: 21px; }
 .report-document-header > div:last-child span { display: block; font-size: 11px; font-weight: 800; margin-top: 7px; }
+.report-quality-panel { border-left: 4px solid var(--orange); padding: 18px; }
+.report-quality-panel.pass { border-left-color: var(--green); }
+.report-quality-panel > header { align-items: center; display: flex; justify-content: space-between; margin-bottom: 10px; }
+.report-quality-panel > header span { color: var(--blue); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; }
+.report-quality-panel > header h2 { font-size: 17px; margin: 0; }
+.report-quality-panel > header strong { color: var(--orange); font-size: 13px; }
+.report-quality-panel.pass > header strong { color: var(--green); }
+.report-quality-panel > p { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 0 0 14px; }
+.report-quality-grid { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.report-quality-grid article { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; min-width: 0; padding: 13px; }
+.report-quality-grid article.pass { border-left: 3px solid var(--green); }
+.report-quality-grid article.review { border-left: 3px solid var(--orange); }
+.report-quality-grid span { color: var(--muted); display: block; font-size: 8px; font-weight: 800; margin-bottom: 7px; }
+.report-quality-grid h3 { font-size: 12px; margin: 0 0 6px; }
+.report-quality-grid p { color: var(--muted); font-size: 9px; line-height: 1.45; margin: 0; overflow-wrap: anywhere; }
 .report-sections { display: grid; gap: 22px; padding: 24px; }
 .report-sections section { border-bottom: 1px solid var(--line); padding-bottom: 20px; }
 .report-sections section:last-child { border-bottom: 0; padding-bottom: 0; }
@@ -732,6 +758,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
   .news-risk-summary-item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 13px; }
   .news-risk-summary-item:last-child { border-right: 1px solid var(--line); }
   .news-risk-summary-item strong { font-size: 16px; }
+  .news-risk-narrative { gap: 13px; grid-template-columns: minmax(0, 1fr); margin-bottom: 10px; padding: 15px; }
+  .news-risk-narrative h3 { font-size: 15px; }
+  .news-risk-narrative p, .news-risk-narrative ul { font-size: 9px; }
+  .news-risk-narrative ul { border-left: 0; border-top: 1px solid var(--line); padding: 11px 0 0 16px; }
   .news-risk-columns { gap: 10px; grid-template-columns: minmax(0, 1fr); }
   .news-risk-group > header { padding: 14px; }
   .news-risk-card summary { padding: 14px 12px; }
@@ -769,6 +799,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
   .reports-summary-item:last-child { border-right: 1px solid var(--line); }
   .reports-summary-item strong { font-size: 18px; }
   .reports-layout { gap: 10px; grid-template-columns: minmax(0, 1fr); margin: 0 10px; }
+  .reports-document-stack { gap: 10px; }
   .reports-index { padding: 0; }
   .reports-index nav { display: flex; max-height: none; overflow-x: auto; }
   .reports-index a { border-bottom: 0; border-right: 1px solid var(--line); flex: 0 0 230px; }
@@ -776,6 +807,9 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
   .report-document-header { align-items: start; display: block; padding: 18px; }
   .report-document-header > div:last-child { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; text-align: left; }
   .report-document-header > div:last-child strong { font-size: 19px; }
+  .report-quality-panel { padding: 15px; }
+  .report-quality-panel > header { align-items: start; }
+  .report-quality-grid { grid-template-columns: minmax(0, 1fr); }
   .report-sections { gap: 18px; padding: 18px; }
   .report-sections ul { font-size: 9px; }
   .research-masthead { align-items: start; display: block; min-height: 0; padding: 22px 18px; }

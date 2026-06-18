@@ -178,6 +178,30 @@ def test_main_routes_dashboard_automation_commands(monkeypatch, tmp_path) -> Non
     ]
 
 
+def test_main_routes_run_dashboard_loop(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
+
+    def fake_loop(app, *, interval_seconds, once):
+        calls.append(("run_dashboard_loop", app.__class__.__name__, interval_seconds, once))
+        return {"executed": []}
+
+    _patch_cli_runtime(monkeypatch, tmp_path, FakeApp)
+    monkeypatch.setattr(cli_module, "run_dashboard_loop", fake_loop)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["portfolio-watchdog", "run-dashboard-loop", "--interval-seconds", "30", "--once"],
+    )
+
+    cli_module.main()
+
+    assert calls[-1] == ("run_dashboard_loop", "FakeApp", 30, True)
+
+
 def test_add_cash_flow_is_deterministically_idempotent(tmp_path) -> None:
     watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
     occurred_at = datetime(2026, 6, 10, 12, 30)

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .app import PortfolioWatchdogApp
 from .config import load_config, load_env
+from .dashboard_loop import run_dashboard_loop
 from .runtime_paths import apply_env_base_paths, apply_runtime_base_paths, resolve_runtime_paths, resolve_setup_paths
 from .scheduler import install_windows_schedule
 from .setup_wizard import run_setup_wizard
@@ -15,13 +16,15 @@ logger = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portfolio Watchdog")
-    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "sync-calendar", "collect-news-risks", "merge-news-risks", "sync-news-risks", "refresh-dashboard", "prepare-codex-inputs", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
+    parser.add_argument("command", choices=["setup", "run", "check-news", "weekly-report", "weekly-source", "portfolio-source", "render-report-pdf", "send-report-document", "send-message-file", "complete-report", "sync-dashboard", "sync-report", "sync-opinions", "sync-calendar", "collect-news-risks", "merge-news-risks", "sync-news-risks", "refresh-dashboard", "prepare-codex-inputs", "run-dashboard-loop", "send-sample-reports", "install-schedule", "check-config", "send-test-alert", "sync-ledger", "add-cash-flow", "performance-summary"])
     parser.add_argument("--config", default=None, help="설정 파일 경로")
     parser.add_argument("--env", default=None, help="환경 변수 파일 경로")
     parser.add_argument("--path", default=None, help="리포트/메시지/대시보드 원본 파일 경로")
     parser.add_argument("--output", default=None, help="render-report-pdf/complete-report에서 생성할 PDF 파일 경로")
     parser.add_argument("--sync-dashboard", action="store_true", help="complete-report 실행 후 대시보드를 동기화")
     parser.add_argument("--skip-codex", action="store_true", help="Skip optional Codex artifact sync in refresh-dashboard")
+    parser.add_argument("--interval-seconds", type=int, default=60, help="run-dashboard-loop polling interval")
+    parser.add_argument("--once", action="store_true", help="Run one dashboard loop tick and exit")
     parser.add_argument("--amount", type=float, default=None)
     parser.add_argument("--occurred-at", default=None)
     parser.add_argument("--memo", default=None)
@@ -51,7 +54,7 @@ def main() -> None:
         logger.exception("설정 로드 실패")
         raise SystemExit(1) from exc
 
-    app = PortfolioWatchdogApp(config=config, env=env, use_llm_news=args.command in {"run", "check-news", "weekly-report", "send-sample-reports"})
+    app = PortfolioWatchdogApp(config=config, env=env, use_llm_news=args.command in {"run", "check-news", "weekly-report", "run-dashboard-loop", "send-sample-reports"})
     if args.command == "run":
         app.run()
     elif args.command == "check-news":
@@ -141,6 +144,12 @@ def main() -> None:
     elif args.command == "prepare-codex-inputs":
         try:
             print(json.dumps(app.prepare_codex_inputs(), ensure_ascii=False, indent=2, default=str))
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            logger.error("%s", exc)
+            raise SystemExit(1) from exc
+    elif args.command == "run-dashboard-loop":
+        try:
+            print(json.dumps(run_dashboard_loop(app, interval_seconds=args.interval_seconds, once=args.once), ensure_ascii=False, indent=2, default=str))
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error("%s", exc)
             raise SystemExit(1) from exc

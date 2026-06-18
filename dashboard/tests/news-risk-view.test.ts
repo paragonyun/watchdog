@@ -74,3 +74,24 @@ test("summarizes scope counts, freshness, and refresh state", () => {
   assert.equal(view.codexGeneratedAt, "2026-06-13T08:00:00+00:00");
 });
 
+test("builds an analyst-style narrative from the highest priority risks", () => {
+  const view = buildNewsRiskView(payload);
+
+  assert.equal(view.narrative.tone, "urgent");
+  assert.equal(view.narrative.primaryRiskTitle, view.directRisks[0].title);
+  assert.match(view.narrative.summary, /10\.00%/);
+  assert.ok(view.narrative.nextActions.length >= 3);
+});
+
+test("builds a calm narrative when no news risks are present", () => {
+  const view = buildNewsRiskView({
+    ...payload,
+    direct_risks: [],
+    market_risks: [],
+    codex_generated_at: null,
+  });
+
+  assert.equal(view.narrative.tone, "watch");
+  assert.equal(view.narrative.primaryRiskTitle, null);
+  assert.equal(view.narrative.nextActions.length, 1);
+});
