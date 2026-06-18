@@ -269,6 +269,7 @@ def test_refresh_dashboard_can_skip_codex_artifacts(monkeypatch, tmp_path) -> No
 def test_prepare_codex_inputs_writes_manifest(monkeypatch, tmp_path) -> None:
     watchdog = PortfolioWatchdogApp(_app_config(tmp_path), env={})
     manifest = tmp_path / "codex_dashboard_inputs_latest.json"
+    instructions = tmp_path / "codex_dashboard_instructions_latest.md"
     report_source = tmp_path / "portfolio_report_source.txt"
     report_source.write_text("source", encoding="utf-8")
     monkeypatch.setattr(
@@ -283,6 +284,7 @@ def test_prepare_codex_inputs_writes_manifest(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(watchdog, "create_portfolio_report_source", lambda: report_source)
     monkeypatch.setattr(watchdog, "_codex_inputs_path", lambda: manifest)
+    monkeypatch.setattr(watchdog, "_codex_instructions_path", lambda: instructions)
     monkeypatch.setattr(watchdog, "_codex_news_risk_path", lambda: tmp_path / "codex_news_risk.json")
     monkeypatch.setattr(watchdog, "_codex_opinion_path", lambda: tmp_path / "codex_investment_opinion.json")
     monkeypatch.setattr(watchdog, "_codex_calendar_path", lambda: tmp_path / "economic_calendar.json")
@@ -292,7 +294,15 @@ def test_prepare_codex_inputs_writes_manifest(monkeypatch, tmp_path) -> None:
 
     assert payload["schema_version"] == "codex_dashboard_inputs_v1"
     assert payload["inputs"]["portfolio_report_source"] == str(report_source)
+    assert payload["instructions_path"] == str(instructions)
     assert manifest.exists()
+    assert instructions.exists()
+    text = instructions.read_text(encoding="utf-8")
+    assert "경제 일정" in text
+    assert "codex_economic_calendar_v1" in text
+    assert "매수 / 매도 / 관찰 필요" in text
+    assert "상승 / 기준 / 하락" in text
+    assert "사실 / 해석 / 추정" in text
 
 
 def test_send_report_document_missing_file_error(tmp_path) -> None:

@@ -263,6 +263,67 @@ def _refresh_step(
     return step
 
 
+def _build_codex_dashboard_instructions(manifest: Dict[str, object]) -> str:
+    inputs = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+    outputs = (
+        manifest.get("expected_outputs")
+        if isinstance(manifest.get("expected_outputs"), dict)
+        else {}
+    )
+    return f"""# Portfolio Watchdog Codex 작업 지시서
+
+이 파일은 Watchdog이 생성한 최신 입력 manifest를 기준으로 Codex가 채워야 할 산출물 지시서입니다. OpenAI API를 직접 호출하지 말고, 로컬 입력 파일을 읽어 판단한 뒤 지정된 JSON 파일만 작성하세요.
+
+## 입력 파일
+- 대시보드 v2 요약: `{inputs.get("dashboard_v2", "")}`
+- 뉴스 리스크 원본: `{inputs.get("news_risk", "")}`
+- 포트폴리오 리포트 원본: `{inputs.get("portfolio_report_source", "")}`
+
+## 출력 파일
+- 뉴스 리스크 보강: `{outputs.get("news_risk", "")}`
+- 투자 의견: `{outputs.get("opinion", "")}`
+- 경제 일정: `{outputs.get("calendar", "")}`
+- 완성 리서치 리포트: `{outputs.get("research_report", "")}`
+
+## 공통 원칙
+- 클라우드 업로드 대상 JSON에는 수량, 평단, 계좌번호, API 키, 원문 에러 detail을 넣지 않습니다.
+- 사실 / 해석 / 추정을 분리하고, 불확실한 내용은 추정으로 라벨링합니다.
+- 숫자는 대시보드 v2 요약과 포트폴리오 리포트 원본 사이에서 tie-out을 확인합니다.
+- 산출 후 `python -m portfolio_watchdog refresh-dashboard`를 실행하면 Watchdog이 검증 후 업로드합니다.
+
+## 투자 의견 JSON
+- schema_version은 `codex_investment_opinion_v1`입니다.
+- 각 자산 판단은 매수 / 매도 / 관찰 필요 중 하나만 사용합니다.
+- 판단 근거는 thesis, catalysts, risks, watch_points로 나누고, 뉴스 리스크와 연결된 항목은 출처를 언급합니다.
+- 단순한 관찰 나열이 아니라 지금 행동이 필요한지, 기다려도 되는지, 줄여야 하는지를 명확히 씁니다.
+
+## 경제 일정 JSON
+- schema_version은 `codex_economic_calendar_v1`입니다.
+- timezone은 `Asia/Seoul`입니다.
+- 향후 14일 안의 주요 경제 일정만 담습니다.
+- 우선순위는 포트폴리오에 영향을 줄 수 있는 금리, 물가, 고용, 중앙은행, 환율, 규제, 대형 실적 이벤트입니다.
+- 각 이벤트에는 title, starts_at, country, category, importance, asset_groups, expected_impact, watch_note, source_url을 채웁니다.
+- 일정이 불확실하면 넣지 말고, 확인 가능한 발표 시각만 사용합니다.
+
+## 완성 리서치 리포트 JSON
+- schema_version은 `dashboard_report_v2`입니다.
+- 유명 증권사 리서치처럼 본문 자체를 작성합니다. 프롬프트나 메모 형태로 두지 않습니다.
+- executive_summary는 3~5개 핵심 bullet로 작성합니다.
+- investment_thesis에는 headline, body, facts, interpretations, estimates를 모두 채웁니다.
+- asset_views에는 주요 자산별 매수 / 매도 / 관찰 필요 판단과 catalysts, risks를 포함합니다.
+- scenarios는 상승 / 기준 / 하락 3개 이상으로 작성하고 trigger, impact, response를 각각 채웁니다.
+- conclusion은 현재 포트폴리오의 다음 행동 원칙을 1문단으로 정리합니다.
+- appendix는 Watchdog 입력 숫자를 그대로 축소 반영하고 민감 필드를 추가하지 않습니다.
+
+## 리포트 QC 체크
+- 총자산, 자산군 합계, 종목 합계가 서로 어긋나지 않는지 확인합니다.
+- 사실 / 해석 / 추정이 모두 비어 있지 않은지 확인합니다.
+- asset_views의 각 항목에 catalysts와 risks가 모두 있는지 확인합니다.
+- 상승 / 기준 / 하락 시나리오가 모두 있는지 확인합니다.
+- 데이터 fallback이 있으면 결론의 확신도를 낮추고, live 상태면 근거에 반영합니다.
+"""
+
+
 class PortfolioWatchdogApp:
     def __init__(self, config: AppConfig, env: Dict[str, str], use_llm_news: bool = True) -> None:
         self.config = config
@@ -408,6 +469,7 @@ class PortfolioWatchdogApp:
                 "calendar": str(self._codex_calendar_path()),
                 "research_report": str(self._codex_report_path()),
             },
+            "instructions_path": str(self._codex_instructions_path()),
             "latest_payloads": {
                 "dashboard_schema": ledger_payload.get("schema_version"),
                 "news_risk_schema": news_payload.get("schema_version"),
@@ -423,6 +485,12 @@ class PortfolioWatchdogApp:
         path = self._codex_inputs_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        instructions_path = self._codex_instructions_path()
+        instructions_path.parent.mkdir(parents=True, exist_ok=True)
+        instructions_path.write_text(
+            _build_codex_dashboard_instructions(payload),
+            encoding="utf-8",
+        )
         logger.info("Codex input manifest created: %s", path)
         return payload
 
@@ -456,6 +524,9 @@ class PortfolioWatchdogApp:
 
     def _codex_inputs_path(self) -> Path:
         return self._codex_workspace_path() / "codex_dashboard_inputs_latest.json"
+
+    def _codex_instructions_path(self) -> Path:
+        return self._codex_workspace_path() / "codex_dashboard_instructions_latest.md"
 
     def _codex_news_risk_path(self) -> Path:
         return self._codex_workspace_path() / "codex_news_risk.json"
