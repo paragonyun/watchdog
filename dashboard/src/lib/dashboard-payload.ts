@@ -37,6 +37,7 @@ export type DashboardPayload = {
     reason: string;
     why_it_matters: string;
     url?: string | null;
+    published_at?: string | null;
   }>;
   provider_status: Array<{
     provider: string;

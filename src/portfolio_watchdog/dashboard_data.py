@@ -142,6 +142,7 @@ def _news_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "reason": str(item.get("reason") or "확인 불가"),
         "why_it_matters": str(item.get("why_it_matters") or ""),
         "url": item.get("url"),
+        "published_at": item.get("published_at"),
     }
 
 

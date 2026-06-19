@@ -341,15 +341,26 @@ function NewsRiskPanel({ insight }: { insight: HomeInsights["newsRisk"] }) {
 }
 
 function NewsPanel({ view }: { view: DashboardView }) {
+  const newsItems = [...view.news].sort(compareNews).slice(0, 5);
+
   return (
     <section className="terminal-panel terminal-news-panel">
       <PanelHeading title="관련 뉴스" meta={`${view.news.length}건`} />
       {view.news.length ? (
         <div className="terminal-news-list">
-          {view.news.slice(0, 5).map((news) => (
-            <article key={`${news.title}-${news.impact_score}`}>
+          {newsItems.map((news) => (
+            <article key={`${news.title}-${news.impact_score}-${news.published_at ?? ""}`}>
               <div>
-                <strong>{news.title}</strong>
+                <div className="terminal-news-title-row">
+                  {news.url ? (
+                    <a href={news.url} target="_blank" rel="noreferrer">
+                      {news.title}
+                    </a>
+                  ) : (
+                    <strong>{news.title}</strong>
+                  )}
+                  {news.published_at ? <time dateTime={news.published_at}>{formatDate(news.published_at)}</time> : null}
+                </div>
                 <p>{news.reason}</p>
               </div>
               <span className={tone(news.impact_score) + "-text"}>{signed(news.impact_score)}</span>
@@ -361,6 +372,18 @@ function NewsPanel({ view }: { view: DashboardView }) {
       )}
     </section>
   );
+}
+
+function compareNews(left: DashboardView["news"][number], right: DashboardView["news"][number]): number {
+  const dateDiff = newsTimestamp(right.published_at) - newsTimestamp(left.published_at);
+  if (dateDiff !== 0) return dateDiff;
+  return right.impact_score - left.impact_score;
+}
+
+function newsTimestamp(value?: string | null): number {
+  if (!value) return 0;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function OpinionPanel({ insight }: { insight: HomeInsights["opinion"] }) {
