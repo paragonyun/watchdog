@@ -16,6 +16,9 @@ export type HomeInsights = {
       priorityLabel: string;
       title: string;
       impact: string;
+      sourceTitle: string | null;
+      sourceUrl: string | null;
+      publishedAt: string;
     }>;
   } | null;
   calendar: {
@@ -103,6 +106,9 @@ function newsRiskSummary(payload: NewsRiskPayload): NonNullable<HomeInsights["ne
         priorityLabel: item.priorityLabel,
         title: item.title,
         impact: item.potential_impact,
+        sourceTitle: item.source_links[0]?.title ?? null,
+        sourceUrl: item.source_links[0]?.url ?? null,
+        publishedAt: item.last_updated_at,
       })),
   };
 }

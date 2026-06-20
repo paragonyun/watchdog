@@ -50,8 +50,22 @@ def _write_task_runner(workdir: Path) -> Path:
     runner = workdir / "watchdog-task.cmd"
     runner.write_text(
         "@echo off\r\n"
-        "cd /d \"%~dp0\"\r\n"
-        f"{subprocess.list2cmdline(_runtime_base_command())} %*\r\n",
+        "setlocal\r\n"
+        "set \"SCRIPT_DIR=%~dp0\"\r\n"
+        "cd /d \"%SCRIPT_DIR%\" || exit /b 1\r\n"
+        "if not exist \"logs\" mkdir \"logs\"\r\n"
+        "set \"LOG_FILE=logs\\watchdog-task.log\"\r\n"
+        "set \"PYTHON=%SCRIPT_DIR%.venv\\Scripts\\python.exe\"\r\n"
+        "echo.>> \"%LOG_FILE%\"\r\n"
+        "echo === %DATE% %TIME% watchdog-task %* ===>> \"%LOG_FILE%\"\r\n"
+        "if exist \"%PYTHON%\" (\r\n"
+        "  \"%PYTHON%\" -m portfolio_watchdog %* >> \"%LOG_FILE%\" 2>&1\r\n"
+        ") else (\r\n"
+        "  python -m portfolio_watchdog %* >> \"%LOG_FILE%\" 2>&1\r\n"
+        ")\r\n"
+        "set \"EXIT_CODE=%ERRORLEVEL%\"\r\n"
+        "echo exit_code=%EXIT_CODE%>> \"%LOG_FILE%\"\r\n"
+        "exit /b %EXIT_CODE%\r\n",
         encoding="utf-8",
     )
     return runner

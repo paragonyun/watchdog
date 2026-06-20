@@ -30,7 +30,12 @@ def test_install_windows_schedule_updates_power_settings(monkeypatch, tmp_path) 
     assert "watchdog-task.cmd" in " ".join(news_call)
     assert "&&" not in " ".join(news_call)
     assert (tmp_path / "watchdog-task.cmd").exists()
-    assert "portfolio_watchdog" in (tmp_path / "watchdog-task.cmd").read_text(encoding="utf-8")
+    runner_text = (tmp_path / "watchdog-task.cmd").read_text(encoding="utf-8")
+    assert "portfolio_watchdog" in runner_text
+    assert 'set "PYTHON=%SCRIPT_DIR%.venv\\Scripts\\python.exe"' in runner_text
+    assert "watchdog-task.log" in runner_text
+    assert "exit /b %EXIT_CODE%" in runner_text
+    assert str(tmp_path) not in runner_text
 
     news_risk_call = next(call for call in create_calls if "PortfolioWatchdogNewsRiskHourly" in call)
     assert "collect-news-risks" in " ".join(news_risk_call)

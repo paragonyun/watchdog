@@ -91,3 +91,49 @@ test("dashboard news links to source and sorts by latest date then impact", () =
   assert.ok(html.indexOf("Same day higher impact") < html.indexOf("Latest low impact"));
   assert.ok(html.indexOf("Latest low impact") < html.indexOf("Older high impact"));
 });
+
+test("dashboard news can use refreshed news risk source links", () => {
+  const html = renderToStaticMarkup(createElement(DashboardHome, {
+    view: {
+      ...baseView,
+      news: [
+        {
+          title: "Stale v1 news",
+          impact: "positive",
+          impact_score: 2,
+          score_label: "old",
+          related_assets: ["SPY"],
+          reason: "This is older v1 dashboard news.",
+          why_it_matters: "",
+          url: "https://example.com/stale",
+          published_at: "2026-06-19T09:00:00+09:00",
+        },
+      ],
+    } as DashboardView,
+    insights: {
+      ...insights,
+      newsRisk: {
+        generatedAt: "2026-06-20T08:00:00+09:00",
+        statusLabel: "actual",
+        totalCount: 1,
+        newCount: 1,
+        items: [
+          {
+            id: "risk-1",
+            priority: "urgent",
+            priorityLabel: "urgent",
+            title: "Risk title",
+            impact: "Fresh risk impact.",
+            sourceTitle: "Fresh source article",
+            sourceUrl: "https://example.com/fresh-source",
+            publishedAt: "2026-06-20T07:00:00+09:00",
+          },
+        ],
+      },
+    } as unknown as HomeInsights,
+  }));
+
+  assert.match(html, /href="https:\/\/example\.com\/fresh-source"/);
+  assert.match(html, /dateTime="2026-06-20T07:00:00\+09:00"/);
+  assert.ok(html.indexOf("Fresh source article") < html.indexOf("Stale v1 news"));
+});

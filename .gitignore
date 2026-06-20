@@ -35,3 +35,7 @@ dashboard/.env.local
 dashboard/coverage/
 .vercel/
 .env.local
+.env.*.local
+.superpowers/
+reports/dashboard_report_v2_*.json
+watchdog-task.cmd

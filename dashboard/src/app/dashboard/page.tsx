@@ -123,7 +123,7 @@ export function DashboardHome({ view, insights }: { view: DashboardView; insight
           <AssetPanel view={view} />
           <CalendarPanel insight={insights.calendar} />
           <NewsRiskPanel insight={insights.newsRisk} />
-          <NewsPanel view={view} />
+          <NewsPanel insight={insights.newsRisk} view={view} />
           <OpinionPanel insight={insights.opinion} />
           <ReportPanel insight={insights.report} />
           <DataStatusPanel view={view} />
@@ -340,13 +340,16 @@ function NewsRiskPanel({ insight }: { insight: HomeInsights["newsRisk"] }) {
   );
 }
 
-function NewsPanel({ view }: { view: DashboardView }) {
-  const newsItems = [...view.news].sort(compareNews).slice(0, 5);
+type NewsPanelItem = DashboardView["news"][number];
+
+function NewsPanel({ view, insight }: { view: DashboardView; insight: HomeInsights["newsRisk"] }) {
+  const allNewsItems = buildRelatedNewsItems(view.news, insight);
+  const newsItems = [...allNewsItems].sort(compareNews).slice(0, 5);
 
   return (
     <section className="terminal-panel terminal-news-panel">
-      <PanelHeading title="관련 뉴스" meta={`${view.news.length}건`} />
-      {view.news.length ? (
+      <PanelHeading title="관련 뉴스" meta={`${allNewsItems.length}건`} />
+      {allNewsItems.length ? (
         <div className="terminal-news-list">
           {newsItems.map((news) => (
             <article key={`${news.title}-${news.impact_score}-${news.published_at ?? ""}`}>
@@ -374,9 +377,33 @@ function NewsPanel({ view }: { view: DashboardView }) {
   );
 }
 
-function compareNews(left: DashboardView["news"][number], right: DashboardView["news"][number]): number {
+function buildRelatedNewsItems(legacyNews: NewsPanelItem[], insight: HomeInsights["newsRisk"]): NewsPanelItem[] {
+  const riskNews = (insight?.items ?? [])
+    .filter((item) => item.sourceUrl)
+    .map((item) => ({
+      title: item.sourceTitle ?? item.title,
+      impact: item.priority,
+      impact_score: item.priority === "urgent" ? -3 : item.priority === "caution" ? -2 : -1,
+      score_label: item.priorityLabel,
+      related_assets: [],
+      reason: item.impact,
+      why_it_matters: item.impact,
+      url: item.sourceUrl,
+      published_at: item.publishedAt,
+    }));
+  const byUrl = new Map<string, NewsPanelItem>();
+  for (const item of [...riskNews, ...legacyNews]) {
+    const key = item.url ?? `${item.title}-${item.published_at ?? ""}`;
+    if (!byUrl.has(key)) byUrl.set(key, item);
+  }
+  return [...byUrl.values()];
+}
+
+function compareNews(left: NewsPanelItem, right: NewsPanelItem): number {
   const dateDiff = newsTimestamp(right.published_at) - newsTimestamp(left.published_at);
   if (dateDiff !== 0) return dateDiff;
+  const impactDiff = Math.abs(right.impact_score) - Math.abs(left.impact_score);
+  if (impactDiff !== 0) return impactDiff;
   return right.impact_score - left.impact_score;
 }
 
