@@ -307,16 +307,23 @@ def _build_codex_dashboard_instructions(manifest: Dict[str, object]) -> str:
 
 ## 완성 리서치 리포트 JSON
 - schema_version은 `dashboard_report_v2`입니다.
-- 유명 증권사 리서치처럼 본문 자체를 작성합니다. 프롬프트나 메모 형태로 두지 않습니다.
-- executive_summary는 3~5개 핵심 bullet로 작성합니다.
-- investment_thesis에는 headline, body, facts, interpretations, estimates를 모두 채웁니다.
-- asset_views에는 주요 자산별 매수 / 매도 / 관찰 필요 판단과 catalysts, risks를 포함합니다.
-- scenarios는 상승 / 기준 / 하락 3개 이상으로 작성하고 trigger, impact, response를 각각 채웁니다.
-- conclusion은 현재 포트폴리오의 다음 행동 원칙을 1문단으로 정리합니다.
+- 유명 증권사 리서치처럼 본문 자체를 작성합니다. 프롬프트, 메모, 체크리스트 형태로 두지 않습니다.
+- title은 리포트의 투자 결론을 압축하고, subtitle은 현재 장세와 포트폴리오 대응을 한 문장으로 설명합니다.
+- stance는 positive / neutral / cautious 중 하나로만 선택하고, 확신도가 낮으면 반드시 cautious 또는 neutral을 사용합니다.
+- executive_summary는 4개 내외로 작성합니다. 1) 최종 판단, 2) 성과와 배분, 3) 핵심 리스크, 4) 다음 행동을 각각 분리합니다.
+- key_metrics는 총자산, 기간 변화, TWR 또는 데이터 부족 상태, 주요 비중/리스크 지표를 포함합니다.
+- investment_thesis에는 headline, body, facts, interpretations, estimates를 모두 채웁니다. body는 애널리스트 본문처럼 원인, 판단, 반대 논리, 행동 원칙이 이어지게 씁니다.
+- facts는 관측된 숫자와 확인된 뉴스만, interpretations는 그 숫자의 의미만, estimates는 앞으로의 조건부 전망만 담습니다.
+- asset_views에는 주요 보유 자산과 위험 기여도가 큰 자산을 우선 포함하고, 각 자산에 매수 / 매도 / 관찰 필요 판단과 catalysts, risks를 포함합니다.
+- asset_views의 thesis는 "왜 지금 이 판단인지"와 "어떤 조건에서 판단이 바뀌는지"를 함께 설명합니다.
+- scenarios는 상승 / 기준 / 하락 3개 이상으로 작성하고 trigger, impact, response를 각각 채웁니다. response는 실제 다음 행동 원칙이어야 합니다.
+- risk_watchlist는 단순 위험 나열이 아니라 현재 포트폴리오 판단을 바꿀 수 있는 관찰 신호로 씁니다.
+- conclusion은 현재 포트폴리오의 다음 행동 원칙을 1문단으로 정리하되, 자동 주문이나 단정적 투자 자문처럼 쓰지 않습니다.
 - appendix는 Watchdog 입력 숫자를 그대로 축소 반영하고 민감 필드를 추가하지 않습니다.
 
 ## 리포트 QC 체크
 - 총자산, 자산군 합계, 종목 합계가 서로 어긋나지 않는지 확인합니다.
+- key_metrics 숫자가 summary 및 appendix와 충돌하지 않는지 확인합니다.
 - 사실 / 해석 / 추정이 모두 비어 있지 않은지 확인합니다.
 - asset_views의 각 항목에 catalysts와 risks가 모두 있는지 확인합니다.
 - 상승 / 기준 / 하락 시나리오가 모두 있는지 확인합니다.

@@ -118,6 +118,7 @@ test("builds report quality checks beyond JSON validity", () => {
   const quality = buildReportQualityView(v2);
 
   assert.equal(quality.status, "review");
+  assert.equal(quality.checks.find((check) => check.id === "executive")?.status, "review");
   assert.equal(quality.checks.find((check) => check.id === "evidence")?.status, "pass");
   assert.equal(quality.checks.find((check) => check.id === "scenarios")?.status, "review");
 });

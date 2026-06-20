@@ -34,7 +34,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   return <ReportsScreen index={index} report={report} />;
 }
 
-function ReportsScreen({ index, report }: { index: ReportIndexItem[]; report: ReportPayload }) {
+export function ReportsScreen({ index, report }: { index: ReportIndexItem[]; report: ReportPayload }) {
   const completedCount = index.filter((item) => item.schema_version === "dashboard_report_v2").length;
   const quality = buildReportQualityView(report);
   return (
@@ -105,20 +105,45 @@ function ReportIndex({ index, selected }: { index: ReportIndexItem[]; selected: 
 }
 
 function ResearchDocument({ report }: { report: ResearchReportPayload }) {
+  const fallbackCount = report.appendix.provider_status.filter((provider) => provider.used_fallback).length;
+  const dataStatus = fallbackCount ? `${fallbackCount}개 출처 대체값` : "Live 데이터";
   return (
     <article className="surface report-document research-document">
       <header className={`research-masthead ${report.stance}`}>
         <div>
-          <span>{kindLabel(report.report_kind)} · CODEX RESEARCH</span>
+          <span>{kindLabel(report.report_kind)} · INSTITUTIONAL BRIEF</span>
           <h2>{report.title}</h2>
           <p>{report.subtitle}</p>
         </div>
         <div className="research-stance">
-          <small>전략 판단</small>
+          <small>INVESTMENT VIEW</small>
           <strong>{stanceLabel(report.stance)}</strong>
-          <span>{formatDashboardDate(report.generated_at)}</span>
+          <span>{stanceDescription(report.stance)}</span>
         </div>
       </header>
+
+      <section className="research-decision-band" aria-label="리포트 핵심 판단">
+        <article>
+          <span>총자산</span>
+          <strong>{formatKrw(report.summary.total_value_krw)}</strong>
+          <small>{formatDashboardDate(report.generated_at)} 기준</small>
+        </article>
+        <article>
+          <span>기간 변화</span>
+          <strong className={tone(report.summary.change_krw)}>{formatSignedKrw(report.summary.change_krw)}</strong>
+          <small>{formatPercent(report.summary.change_pct)}</small>
+        </article>
+        <article>
+          <span>데이터 상태</span>
+          <strong>{dataStatus}</strong>
+          <small>{report.summary.validation_valid ? "숫자 검증 통과" : "숫자 재검토 필요"}</small>
+        </article>
+        <article>
+          <span>문서 결론</span>
+          <strong>{stanceLabel(report.stance)}</strong>
+          <small>{report.risk_watchlist.length}개 관찰 신호</small>
+        </article>
+      </section>
 
       <section className="research-metrics">
         {report.key_metrics.map((metric) => (
@@ -129,14 +154,17 @@ function ResearchDocument({ report }: { report: ResearchReportPayload }) {
       </section>
 
       <section className="research-executive">
-        <span>EXECUTIVE SUMMARY</span>
-        <h3>{report.investment_thesis.headline}</h3>
-        <ul>{report.executive_summary.map((item) => <li key={item}>{item}</li>)}</ul>
+        <div>
+          <span>EXECUTIVE SUMMARY</span>
+          <h3>{report.investment_thesis.headline}</h3>
+          <p>리포트 전체 결론을 먼저 제시하고, 세부 근거는 아래 본문과 부록에서 검증합니다.</p>
+        </div>
+        <ol>{report.executive_summary.map((item) => <li key={item}>{item}</li>)}</ol>
       </section>
 
       <section className="research-body">
         <article className="research-thesis">
-          <header><span>01</span><h3>투자 논리</h3></header>
+          <ResearchSectionHeader number="01" title="투자 논리" caption="결론을 뒷받침하는 핵심 가설과 근거 레이어" />
           <p>{report.investment_thesis.body}</p>
           <div className="research-evidence-grid">
             <Evidence label="사실" items={report.investment_thesis.facts} />
@@ -146,11 +174,20 @@ function ResearchDocument({ report }: { report: ResearchReportPayload }) {
         </article>
 
         <article>
-          <header><span>02</span><h3>자산별 전략</h3></header>
+          <ResearchSectionHeader number="02" title="자산 배분 스냅샷" caption="현재 비중과 자산군 집중도를 리포트 본문 안에서 재확인" />
+          <AllocationSnapshot report={report} />
+        </article>
+
+        <article>
+          <ResearchSectionHeader number="03" title="자산별 전략" caption="매수, 매도, 관찰 필요를 단순 구분하고 조건부 변화 요인을 표시" />
           <div className="research-asset-views">
             {report.asset_views.map((view) => (
               <section key={view.symbol}>
-                <div><span className={view.action}>{actionLabel(view.action)}</span><h4>{view.name}</h4><small>{view.symbol}</small></div>
+                <div>
+                  <span className={view.action}>{actionLabel(view.action)}</span>
+                  <h4>{view.name}</h4>
+                  <small>{view.symbol} · {actionDescription(view.action)}</small>
+                </div>
                 <p>{view.thesis}</p>
                 <Evidence label="촉매" items={view.catalysts} />
                 <Evidence label="위험" items={view.risks} />
@@ -160,7 +197,7 @@ function ResearchDocument({ report }: { report: ResearchReportPayload }) {
         </article>
 
         <article>
-          <header><span>03</span><h3>시나리오 분석</h3></header>
+          <ResearchSectionHeader number="04" title="시나리오 분석" caption="상승, 기준, 하락 경로별로 판단이 바뀌는 조건과 대응을 분리" />
           <div className="scenario-table">
             {report.scenarios.map((scenario) => (
               <section key={scenario.name}>
@@ -172,13 +209,57 @@ function ResearchDocument({ report }: { report: ResearchReportPayload }) {
         </article>
 
         <article className="research-conclusion">
-          <header><span>04</span><h3>결론 및 위험 점검</h3></header>
-          <blockquote>{report.conclusion}</blockquote>
-          <ul>{report.risk_watchlist.map((risk) => <li key={risk}>{risk}</li>)}</ul>
+          <ResearchSectionHeader number="05" title="결론 및 위험 점검" caption="다음 행동 원칙과 판단 변경 신호" />
+          <div className="research-conclusion-grid">
+            <blockquote>{report.conclusion}</blockquote>
+            <section>
+              <h4>판단 변경 관찰 신호</h4>
+              <ul>{report.risk_watchlist.map((risk) => <li key={risk}>{risk}</li>)}</ul>
+            </section>
+          </div>
         </article>
       </section>
       <ReportAppendix report={report} />
     </article>
+  );
+}
+
+function ResearchSectionHeader({ number, title, caption }: { number: string; title: string; caption: string }) {
+  return (
+    <header className="research-section-heading">
+      <span>{number}</span>
+      <div>
+        <h3>{title}</h3>
+        <p>{caption}</p>
+      </div>
+    </header>
+  );
+}
+
+function AllocationSnapshot({ report }: { report: ResearchReportPayload }) {
+  const total = report.summary.total_value_krw;
+  const groups = [
+    { key: "equity", label: "ISA", value: report.appendix.asset_groups.equity, className: "isa" },
+    { key: "coin", label: "코인", value: report.appendix.asset_groups.coin, className: "coin" },
+    { key: "cash", label: "현금", value: report.appendix.asset_groups.cash, className: "cash" },
+  ];
+
+  return (
+    <div className="research-allocation-snapshot">
+      {groups.map((group) => {
+        const weight = total > 0 ? group.value / total * 100 : 0;
+        return (
+          <section key={group.key}>
+            <div>
+              <strong>{group.label}</strong>
+              <span>{formatKrw(group.value)}</span>
+              <b>{formatPercent(weight, false)}</b>
+            </div>
+            <i className={group.className} style={{ width: `${Math.min(100, Math.max(0, weight))}%` }} />
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -249,7 +330,9 @@ function EmptyReportsPage() {
 function kindLabel(value: "portfolio" | "weekly"): string { return value === "weekly" ? "주간 리포트" : "포트폴리오 리포트"; }
 function statusLabel(value: Pick<ReportIndexItem, "document_status" | "schema_version">): string { return value.schema_version === "dashboard_report_v2" ? "완성 리포트" : value.document_status === "final" ? "기존 최종본" : "작성 원본"; }
 function stanceLabel(value: ResearchReportPayload["stance"]): string { return value === "positive" ? "긍정적" : value === "cautious" ? "신중" : "중립"; }
+function stanceDescription(value: ResearchReportPayload["stance"]): string { return value === "positive" ? "위험 대비 기대수익 우위" : value === "cautious" ? "방어와 확인 우선" : "기존 비중 유지"; }
 function actionLabel(value: ResearchReportPayload["asset_views"][number]["action"]): string { return value === "buy" ? "매수" : value === "sell" ? "매도" : "관찰 필요"; }
+function actionDescription(value: ResearchReportPayload["asset_views"][number]["action"]): string { return value === "buy" ? "분할 접근 후보" : value === "sell" ? "축소 또는 회피 후보" : "조건 확인 전 보류"; }
 function formatKrw(value: number): string { return `${Math.round(value).toLocaleString("ko-KR")}원`; }
 function formatSignedKrw(value: number): string { return `${value > 0 ? "+" : ""}${formatKrw(value)}`; }
 function formatPercent(value: number | null, signed = true): string { return value === null ? "-" : `${signed && value > 0 ? "+" : ""}${value.toFixed(2)}%`; }

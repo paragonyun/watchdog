@@ -59,7 +59,7 @@ export type ReportIndexItem = Pick<
 export type ReportQualityStatus = "pass" | "review";
 
 export type ReportQualityCheck = {
-  id: "document" | "evidence" | "asset_views" | "scenarios" | "appendix" | "providers";
+  id: "document" | "executive" | "evidence" | "asset_views" | "scenarios" | "appendix" | "providers";
   label: string;
   status: ReportQualityStatus;
   detail: string;
@@ -154,6 +154,14 @@ export function buildReportQualityView(payload: ReportPayload): ReportQualityVie
     checks.splice(
       1,
       0,
+      qualityCheck(
+        "executive",
+        "핵심 요약",
+        payload.executive_summary.length >= 3 && payload.key_metrics.length >= 3,
+        payload.executive_summary.length >= 3 && payload.key_metrics.length >= 3
+          ? "최종 판단, 핵심 숫자, 다음 행동을 앞부분에서 요약합니다."
+          : "핵심 요약과 주요 지표는 각각 3개 이상으로 보강하는 편이 좋습니다.",
+      ),
       qualityCheck(
         "evidence",
         "사실/해석/추정",
